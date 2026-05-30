@@ -1,7 +1,6 @@
 # Store Intelligence
 
-> **Phase 0 — Project Scaffold**
-> Development environment and folder structure only. No application logic yet.
+> **Status:** Intelligence API complete (ingest, metrics, funnel, heatmap, anomalies, health). Detection pipeline and dashboard are not yet implemented.
 
 ## Overview
 
@@ -163,15 +162,98 @@ On Windows, reinstalling the headless wheel is usually sufficient.
 └── CHOICES.md
 ```
 
-## Docker (Phase 1+)
-
-SQLite is file-based — no database container required.
+## Run the API locally
 
 ```powershell
-# API only
-docker compose up --build api
+.\.venv\Scripts\Activate.ps1
+copy .env.example .env
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
 
-# API + Streamlit dashboard
+API docs: [http://localhost:8000/docs](http://localhost:8000/docs)
+
+### Seed sample data (optional)
+
+Place challenge files under `./data/` then:
+
+```powershell
+python scripts/seed_from_sample.py
+```
+
+Loads `data/sample_events.jsonl` and `data/pos_transactions.csv` when present (idempotent).
+
+### Run tests
+
+```powershell
+pytest
+pytest --cov=app --cov-report=term-missing
+```
+
+107 tests; `app/` coverage ~95%.
+
+## API endpoints
+
+| Method | Path | Module |
+|--------|------|--------|
+| `GET` | `/health` | `app/health.py` |
+| `POST` | `/events/ingest` | `app/ingestion.py` |
+| `GET` | `/stores/{store_id}/metrics?date=YYYY-MM-DD` | `app/metrics.py` |
+| `GET` | `/stores/{store_id}/funnel?date=YYYY-MM-DD` | `app/funnel.py` |
+| `GET` | `/stores/{store_id}/heatmap?date=YYYY-MM-DD` | `app/heatmap.py` |
+| `GET` | `/stores/{store_id}/anomalies?date=YYYY-MM-DD` | `app/anomalies.py` |
+
+Example payloads: `examples/*.json`
+
+## Detection pipeline (not yet implemented)
+
+The `pipeline/` package contains module stubs (`detect.py`, `tracker.py`, `emit.py`, etc.). Until video processing is built:
+
+1. Ingest events via `POST /events/ingest`, or  
+2. Run `python scripts/seed_from_sample.py` with dataset files in `./data/`.
+
+Planned flow: process CCTV clips → JSONL → ingest → analytics (see [DESIGN.md](./DESIGN.md)).
+
+## Docker
+
+SQLite is file-based — no database container is required. From a clean clone:
+
+```powershell
+git clone https://github.com/Prudhvi-raj-1719/Purpple_Vision.git
+cd Purpple_Vision
+docker compose up --build
+```
+
+No `.env` file is required. Optional: copy `.env.example` to `.env` to override `API_PORT`, `LOG_LEVEL`, etc.
+
+The API listens on [http://localhost:8000](http://localhost:8000). Data persists under `./data` and logs under `./logs`.
+
+### Verify the API
+
+```powershell
+# Health (service status, database, per-store feeds)
+curl http://localhost:8000/health
+
+# Store metrics (empty store returns valid JSON with zeros)
+curl "http://localhost:8000/stores/STORE_BLR_002/metrics?date=2026-03-03"
+curl "http://localhost:8000/stores/STORE_BLR_002/funnel?date=2026-03-03"
+curl "http://localhost:8000/stores/STORE_BLR_002/heatmap?date=2026-03-03"
+curl "http://localhost:8000/stores/STORE_BLR_002/anomalies?date=2026-03-03"
+```
+
+Expected: HTTP 200 and JSON from each endpoint.
+
+### Stop and restart (SQLite persistence)
+
+```powershell
+docker compose down
+docker compose up -d
+```
+
+The SQLite file `./data/store_intelligence.db` survives restarts via the bind mount.
+
+### Optional dashboard profile
+
+```powershell
 docker compose --profile dashboard up --build
 ```
 
@@ -184,9 +266,9 @@ docker compose --profile dashboard up --build
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 0 | Scaffold & environment | In progress |
-| 1 | API core | Not started |
-| 2 | Detection pipeline MVP | Not started |
-| 3 | Pipeline completeness | Not started |
-| 4 | Production polish | Not started |
-| 5 | Live dashboard | Not started |
+| 0 | Scaffold & environment | Complete |
+| 1–2 | Event schema, ingest, health | Complete |
+| 3 | Session engine, metrics, POS correlation | Complete |
+| 4 | Funnel, heatmap, anomalies, production health/logging | Complete |
+| 5 | Detection pipeline (YOLO) | Not started |
+| 6 | Live dashboard | Not started |

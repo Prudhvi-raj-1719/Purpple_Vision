@@ -53,6 +53,7 @@ coverage.xml
 # Logs
 logs/
 *.log
+!logs/.gitkeep
 
 # Database
 *.db

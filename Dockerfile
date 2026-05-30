@@ -1,5 +1,4 @@
 # Store Intelligence — Dockerfile (Python 3.11, SQLite, CPU-only CV stack)
-# Phase 0 skeleton. Application entrypoint added in Phase 1.
 
 FROM python:3.11-slim
 
@@ -26,6 +25,6 @@ COPY . .
 
 RUN mkdir -p /app/data /app/logs
 
-# Placeholder — replaced in Phase 1
-# CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
-CMD ["python", "-c", "print('Store Intelligence API — skeleton ready. Implement app.main in Phase 1.')"]
+EXPOSE 8000
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

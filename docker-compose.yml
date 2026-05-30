@@ -1,5 +1,5 @@
 # Store Intelligence — Docker Compose (SQLite only)
-# Services: API + optional Streamlit dashboard. No database container.
+# Plain `docker compose up --build` starts the API. No .env file required.
 
 services:
   api:
@@ -9,14 +9,26 @@ services:
     container_name: store-intelligence-api
     ports:
       - "${API_PORT:-8000}:8000"
-    env_file:
-      - .env
     environment:
-      - DATABASE_URL=sqlite:////app/data/store_intelligence.db
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      DATABASE_URL: sqlite:////app/data/store_intelligence.db
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      STALE_FEED_THRESHOLD_MINUTES: ${STALE_FEED_THRESHOLD_MINUTES:-10}
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     restart: unless-stopped
 
   dashboard:
@@ -36,10 +48,9 @@ services:
       ]
     ports:
       - "${DASHBOARD_PORT:-8501}:8501"
-    env_file:
-      - .env
     environment:
-      - API_BASE_URL=http://api:8000
+      API_BASE_URL: http://api:8000
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     restart: unless-stopped
