@@ -34,13 +34,17 @@ router = APIRouter(prefix="/stores", tags=["funnel"])
 
 STAGE_UNIQUE_VISITORS = "unique_visitors"
 STAGE_REACHED_ANY_ZONE = "reached_any_zone"
-STAGE_REACHED_BILLING = "reached_billing"
+# PDF funnel: Entry → Zone Visit → Billing Queue → Purchase
+STAGE_BILLING_QUEUE = "billing_queue"
 STAGE_CONVERTED_VISITORS = "converted_visitors"
+
+# Deprecated stage key kept for imports in legacy tests/docs (use billing_queue).
+STAGE_REACHED_BILLING = STAGE_BILLING_QUEUE
 
 FUNNEL_STAGE_ORDER = (
     STAGE_UNIQUE_VISITORS,
     STAGE_REACHED_ANY_ZONE,
-    STAGE_REACHED_BILLING,
+    STAGE_BILLING_QUEUE,
     STAGE_CONVERTED_VISITORS,
 )
 
@@ -63,6 +67,15 @@ def visitors_reached_any_zone(sessions: Sequence[VisitorSession]) -> set[str]:
         session.visitor_id
         for session in customer_sessions(sessions)
         if session.zones_visited
+    }
+
+
+def visitors_joined_billing_queue(sessions: Sequence[VisitorSession]) -> set[str]:
+    """Distinct non-staff visitor_ids who joined the billing queue in any session."""
+    return {
+        session.visitor_id
+        for session in customer_sessions(sessions)
+        if session.joined_queue
     }
 
 
@@ -117,7 +130,7 @@ def compute_store_funnel(
 
     unique_visitors = count_unique_visitors(sessions)
     zone_count = len(visitors_reached_any_zone(sessions))
-    billing_count = len(visitors_reached_billing(sessions))
+    billing_count = len(visitors_joined_billing_queue(sessions))
     converted_count = len(converted_visitor_ids(sessions, transactions))
 
     return StoreFunnelResponse(
@@ -137,7 +150,7 @@ def compute_store_funnel(
     response_model=StoreFunnelResponse,
     summary="Store conversion funnel",
     description=(
-        "Returns visitor-level funnel stages (unique → zone → billing → converted) "
+        "Returns visitor-level funnel stages (unique → zone → billing queue → converted) "
         "with drop-off percentages and overall conversion rate for a UTC calendar day."
     ),
     responses={

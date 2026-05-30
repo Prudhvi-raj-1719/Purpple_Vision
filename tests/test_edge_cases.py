@@ -128,7 +128,7 @@ class TestStaffOnlyTraffic:
         response = client.get(f"/stores/{STORE}/funnel?date={DAY}")
         counts = {s["stage"]: s["count"] for s in response.json()["stages"]}
         assert counts["unique_visitors"] == 0
-        assert counts["reached_billing"] == 0
+        assert counts["billing_queue"] == 0
 
 
 class TestZeroPurchases:

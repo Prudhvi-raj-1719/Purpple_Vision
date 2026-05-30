@@ -13,14 +13,15 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.db import EventRecord, PosTransactionRecord, get_session
 from app.funnel import (
+    STAGE_BILLING_QUEUE,
     STAGE_CONVERTED_VISITORS,
     STAGE_REACHED_ANY_ZONE,
-    STAGE_REACHED_BILLING,
     STAGE_UNIQUE_VISITORS,
     build_funnel_stages,
     compute_drop_off_pct,
     compute_overall_conversion_rate,
     compute_store_funnel,
+    visitors_joined_billing_queue,
     visitors_reached_any_zone,
     visitors_reached_billing,
 )
@@ -131,6 +132,24 @@ class TestVisitorStageSets:
 
         assert visitors_reached_any_zone(sessions) == {"VIS_a"}
 
+    def test_billing_queue_stage_requires_joined_queue_not_zone_only(self) -> None:
+        events = [
+            _record("e1", "ENTRY", visitor_id="VIS_a", hour=10),
+            _record(
+                "e2",
+                "ZONE_ENTER",
+                zone_id="BILLING",
+                visitor_id="VIS_a",
+                hour=10,
+                minute=5,
+            ),
+            _record("e3", "EXIT", visitor_id="VIS_a", hour=11),
+        ]
+        sessions = build_sessions(events)
+
+        assert visitors_reached_billing(sessions) == {"VIS_a"}
+        assert visitors_joined_billing_queue(sessions) == set()
+
     def test_visitors_reached_billing_from_second_session_only(self) -> None:
         events = [
             _record("e1", "ENTRY", visitor_id="VIS_a", hour=10),
@@ -199,7 +218,7 @@ class TestFunnelComputation:
         assert result.date == DAY
         assert counts[STAGE_UNIQUE_VISITORS] == 3
         assert counts[STAGE_REACHED_ANY_ZONE] == 2
-        assert counts[STAGE_REACHED_BILLING] == 1
+        assert counts[STAGE_BILLING_QUEUE] == 1
         assert counts[STAGE_CONVERTED_VISITORS] == 1
         assert result.overall_conversion_rate == 1 / 3
 
@@ -248,7 +267,7 @@ class TestFunnelComputation:
 
         assert counts[STAGE_UNIQUE_VISITORS] == 1
         assert counts[STAGE_REACHED_ANY_ZONE] == 0
-        assert counts[STAGE_REACHED_BILLING] == 0
+        assert counts[STAGE_BILLING_QUEUE] == 0
         assert counts[STAGE_CONVERTED_VISITORS] == 0
 
     def test_reentry_counts_one_unique_visitor(self) -> None:
@@ -316,7 +335,7 @@ class TestFunnelComputation:
         result = compute_store_funnel(STORE, METRIC_DATE, events, txns)
 
         assert _stage_counts([s.model_dump() for s in result.stages])[
-            STAGE_REACHED_BILLING
+            STAGE_BILLING_QUEUE
         ] == 1
         assert _stage_counts([s.model_dump() for s in result.stages])[
             STAGE_CONVERTED_VISITORS
@@ -330,7 +349,7 @@ class TestFunnelStageBuilder:
         assert [s.stage for s in stages] == [
             STAGE_UNIQUE_VISITORS,
             STAGE_REACHED_ANY_ZONE,
-            STAGE_REACHED_BILLING,
+            STAGE_BILLING_QUEUE,
             STAGE_CONVERTED_VISITORS,
         ]
         assert [s.count for s in stages] == [10, 8, 4, 2]

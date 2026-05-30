@@ -189,7 +189,7 @@ pytest
 pytest --cov=app --cov-report=term-missing
 ```
 
-107 tests; `app/` coverage ~95%.
+125 tests; `app/` coverage ~95%.
 
 ## API endpoints
 
@@ -197,18 +197,21 @@ pytest --cov=app --cov-report=term-missing
 |--------|------|--------|
 | `GET` | `/health` | `app/health.py` |
 | `POST` | `/events/ingest` | `app/ingestion.py` |
+| `POST` | `/pos/ingest` | `app/pos_ingestion.py` |
 | `GET` | `/stores/{store_id}/metrics?date=YYYY-MM-DD` | `app/metrics.py` |
 | `GET` | `/stores/{store_id}/funnel?date=YYYY-MM-DD` | `app/funnel.py` |
 | `GET` | `/stores/{store_id}/heatmap?date=YYYY-MM-DD` | `app/heatmap.py` |
 | `GET` | `/stores/{store_id}/anomalies?date=YYYY-MM-DD` | `app/anomalies.py` |
 
-Example payloads: `examples/*.json` (metrics include `average_dwell_by_zone` and `current_queue_depth`; heatmap includes `data_confidence`; anomalies include `suggested_action`)
+Example payloads: `examples/*.json`
+
+Funnel stages: `unique_visitors` → `reached_any_zone` → `billing_queue` → `converted_visitors`. POS conversion uses billing within 5 minutes **before** each transaction timestamp.
 
 ## Detection pipeline (not yet implemented)
 
 The `pipeline/` package contains module stubs (`detect.py`, `tracker.py`, `emit.py`, etc.). Until video processing is built:
 
-1. Ingest events via `POST /events/ingest`, or  
+1. Ingest events via `POST /events/ingest` and POS rows via `POST /pos/ingest`, or  
 2. Run `python scripts/seed_from_sample.py` with dataset files in `./data/`.
 
 Planned flow: process CCTV clips → JSONL → ingest → analytics (see [DESIGN.md](./DESIGN.md)).
@@ -270,5 +273,6 @@ docker compose --profile dashboard up --build
 | 1–2 | Event schema, ingest, health | Complete |
 | 3 | Session engine, metrics, POS correlation | Complete |
 | 4 | Funnel, heatmap, anomalies, production health/logging | Complete |
-| 5 | Detection pipeline (YOLO) | Not started |
-| 6 | Live dashboard | Not started |
+| 5 | PDF API completeness (POS ingest, funnel billing_queue, etc.) | Complete |
+| 6 | Detection pipeline (YOLO) | Not started |
+| 7 | Live dashboard | Not started |

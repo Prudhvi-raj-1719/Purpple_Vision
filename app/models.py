@@ -29,10 +29,10 @@ class EventType(StrEnum):
 
 
 class AnomalySeverity(StrEnum):
-    """Severity levels for store anomaly alerts."""
+    """Severity levels for store anomaly alerts (PDF: INFO / WARN / CRITICAL)."""
 
     INFO = "INFO"
-    WARNING = "WARNING"
+    WARN = "WARN"
     CRITICAL = "CRITICAL"
 
 
@@ -269,6 +269,40 @@ class PosTransactionIngestRequest(BaseModel):
     transactions: list[PosTransaction] = Field(min_length=1, max_length=500)
 
 
+class PosIngestErrorDetail(BaseModel):
+    """Structured error for a single malformed or rejected POS transaction."""
+
+    model_config = _STRICT_MODEL_CONFIG
+
+    index: int = Field(ge=0, description="Position in the submitted batch.")
+    transaction_id: str | None = Field(
+        default=None,
+        description="transaction_id if present in the raw payload.",
+    )
+    error: str = Field(min_length=1)
+
+
+class PosIngestStatusResponse(BaseModel):
+    """POST /pos/ingest response."""
+
+    model_config = _STRICT_MODEL_CONFIG
+
+    status: str = Field(
+        description="Overall result: success, partial, or failed.",
+    )
+    total_received: int = Field(ge=0, description="Number of transactions in the batch.")
+    transactions_ingested: int = Field(
+        ge=0,
+        description="New transactions persisted to the database.",
+    )
+    duplicates_skipped: int = Field(
+        ge=0,
+        description="Transactions skipped because transaction_id exists.",
+    )
+    rejected: int = Field(ge=0, description="Transactions rejected due to validation errors.")
+    errors: list[PosIngestErrorDetail] = Field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # API response models (shape only — logic implemented in later phases)
 # ---------------------------------------------------------------------------
@@ -380,6 +414,9 @@ class Anomaly(BaseModel):
     suggested_action: str = Field(
         min_length=1,
         description="Operational recommendation for store staff or managers.",
+    )
+    detected_at: datetime = Field(
+        description="UTC timestamp when the anomaly was detected.",
     )
     supporting_metrics: dict[str, float | int | str] = Field(default_factory=dict)
 

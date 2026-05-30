@@ -13,10 +13,11 @@
     "anomalies": [
       {
         "anomaly_type": "QUEUE_SPIKE",
-        "severity": "WARNING",
+        "severity": "WARN",
         "title": "Billing queue spike detected",
         "description": "Queue joins (12) exceed the warning threshold of 10 for the day.",
         "suggested_action": "Deploy additional billing staff or open express checkout lanes to reduce wait times.",
+        "detected_at": "2026-03-03T18:00:00Z",
         "supporting_metrics": {
           "queue_joins": 12
         }
@@ -27,6 +28,7 @@
         "title": "Critical conversion drop detected",
         "description": "Conversion rate (5.0%) is below the critical threshold of 10% despite 8 visitor(s) reaching billing.",
         "suggested_action": "Investigate checkout friction, pricing displays, and POS availability at billing counters.",
+        "detected_at": "2026-03-03T18:00:00Z",
         "supporting_metrics": {
           "conversion_rate": 0.05,
           "unique_visitors": 20,
@@ -36,10 +38,11 @@
       },
       {
         "anomaly_type": "DEAD_ZONE",
-        "severity": "WARNING",
+        "severity": "WARN",
         "title": "Dead zone: ELECTRONICS",
         "description": "Zone ELECTRONICS normalized engagement score (15.0) is below the warning threshold of 20.0.",
         "suggested_action": "Review planogram, signage, and staffing for the underperforming zone; consider promotions.",
+        "detected_at": "2026-03-03T18:00:00Z",
         "supporting_metrics": {
           "zone_id": "ELECTRONICS",
           "normalized_score": 15.0,

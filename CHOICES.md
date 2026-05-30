@@ -85,9 +85,9 @@ SQLite for the hackathon: one `docker compose up`, no DB service, file survives 
 
 ### POS conversion window
 
-**Choice:** `billing_activity_at ≤ transaction.timestamp ≤ billing_activity_at + 5 minutes` (`app/pos_correlation.py`).
+**Choice:** `transaction.timestamp − 5 minutes ≤ billing_activity_at ≤ transaction.timestamp` (`app/pos_correlation.py`).
 
-**Note:** PDF wording emphasizes billing within five minutes *before* transaction; implementation uses a forward window from first billing activity. Documented for follow-up alignment if evaluators require exact semantics.
+**Rationale:** Matches the challenge PDF rule that the visitor was in billing within five minutes before the POS transaction.
 
 ### Anomaly detection
 

@@ -121,6 +121,23 @@ def _types(anomalies: list) -> list[str]:
     return [a.anomaly_type for a in anomalies]
 
 
+class TestAnomalyPdfFields:
+    def test_anomaly_includes_detected_at_and_warn_severity(self) -> None:
+        fixed = datetime(2026, 3, 3, 18, 0, 0, tzinfo=UTC)
+        result = detect_queue_spike(
+            QUEUE_SPIKE_WARNING_JOINS,
+            detected_at=fixed,
+        )
+
+        assert result is not None
+        assert result.detected_at == fixed
+        assert result.severity == AnomalySeverity.WARN
+        assert result.severity.value == "WARN"
+
+    def test_severity_enum_supports_info_warn_critical(self) -> None:
+        assert {s.value for s in AnomalySeverity} == {"INFO", "WARN", "CRITICAL"}
+
+
 class TestQueueSpikeDetection:
     def test_no_anomaly_below_warning_threshold(self) -> None:
         assert detect_queue_spike(QUEUE_SPIKE_WARNING_JOINS - 1) is None
@@ -130,7 +147,7 @@ class TestQueueSpikeDetection:
 
         assert result is not None
         assert result.anomaly_type == ANOMALY_QUEUE_SPIKE
-        assert result.severity == AnomalySeverity.WARNING
+        assert result.severity == AnomalySeverity.WARN
         assert result.suggested_action == SUGGESTED_ACTION_QUEUE_SPIKE
         assert result.supporting_metrics["queue_joins"] == QUEUE_SPIKE_WARNING_JOINS
 
@@ -226,7 +243,7 @@ class TestConversionDropDetection:
         result = detect_conversion_drop(sessions, txns)
 
         assert result is not None
-        assert result.severity == AnomalySeverity.WARNING
+        assert result.severity == AnomalySeverity.WARN
         assert result.supporting_metrics["conversion_rate"] == round(1 / 6, 4)
         assert result.supporting_metrics["conversion_rate"] < CONVERSION_DROP_WARNING_RATE
         assert result.supporting_metrics["conversion_rate"] >= CONVERSION_DROP_CRITICAL_RATE
@@ -255,7 +272,7 @@ class TestDeadZoneDetection:
 
         assert len(results) == 1
         assert results[0].anomaly_type == ANOMALY_DEAD_ZONE
-        assert results[0].severity == AnomalySeverity.WARNING
+        assert results[0].severity == AnomalySeverity.WARN
         assert results[0].suggested_action == SUGGESTED_ACTION_DEAD_ZONE
 
     def test_critical_dead_zone(self) -> None:
@@ -385,6 +402,8 @@ class TestAnomaliesEndpoint:
         assert ANOMALY_QUEUE_SPIKE in types
         queue_alert = next(a for a in anomalies if a["anomaly_type"] == ANOMALY_QUEUE_SPIKE)
         assert queue_alert["suggested_action"] == SUGGESTED_ACTION_QUEUE_SPIKE
+        assert queue_alert["severity"] == "WARN"
+        assert "detected_at" in queue_alert
 
     def test_get_anomalies_invalid_date_returns_422(self, client: TestClient) -> None:
         response = client.get(f"/stores/{STORE}/anomalies?date=bad-date")

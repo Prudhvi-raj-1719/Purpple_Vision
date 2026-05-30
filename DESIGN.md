@@ -173,5 +173,4 @@ Helpers: `build_sessions()`, `count_unique_visitors()`, `customer_sessions()`.
 
 - CV pipeline not connected to ingest.
 - Anomalies use fixed thresholds, not 7-day rolling averages or 30-minute dead-zone timers per PDF wording (requires multi-day / sub-hour event streams).
-- Funnel does not expose a separate “Billing Queue” stage (`joined_queue` vs `reached_billing`).
 - `CHOICES.md` documents model and storage decisions; detection choice is provisional until pipeline is built.

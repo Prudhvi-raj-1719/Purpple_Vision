@@ -14,6 +14,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.db import init_db
 from app.health import router as health_router
 from app.ingestion import router as ingestion_router
+from app.pos_ingestion import router as pos_ingestion_router
 from app.anomalies import router as anomalies_router
 from app.funnel import router as funnel_router
 from app.heatmap import router as heatmap_router
@@ -47,6 +48,7 @@ app.add_middleware(RequestLoggingMiddleware)
 
 app.include_router(health_router)
 app.include_router(ingestion_router)
+app.include_router(pos_ingestion_router)
 app.include_router(metrics_router)
 app.include_router(funnel_router)
 app.include_router(heatmap_router)

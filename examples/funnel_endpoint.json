@@ -22,7 +22,7 @@
         "drop_off_pct": 33.333333333333336
       },
       {
-        "stage": "reached_billing",
+        "stage": "billing_queue",
         "count": 1,
         "drop_off_pct": 50.0
       },
@@ -33,5 +33,8 @@
       }
     ],
     "overall_conversion_rate": 0.3333333333333333
+  },
+  "setup_notes": {
+    "billing_queue": "Distinct visitors with joined_queue in any session (BILLING_QUEUE_JOIN), not zone-only billing visits"
   }
 }

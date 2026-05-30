@@ -150,7 +150,8 @@ class TestPosCorrelation:
 
         assert is_session_converted(sessions[0], txns) is True
 
-    def test_not_converted_when_pos_outside_window(self) -> None:
+    def test_not_converted_when_billing_more_than_five_minutes_before_pos(self) -> None:
+        """PDF: billing must fall within 5 minutes before the transaction."""
         events = [
             _record("e1", "ENTRY", hour=14, minute=0),
             _record(
@@ -158,13 +159,30 @@ class TestPosCorrelation:
                 "BILLING_QUEUE_JOIN",
                 zone_id="BILLING",
                 hour=14,
-                minute=10,
+                minute=5,
                 metadata={"queue_depth": 1},
             ),
             _record("e3", "EXIT", hour=14, minute=30),
         ]
         sessions = build_sessions(events)
         txns = [_pos("TXN_001", hour=14, minute=20)]
+
+        assert is_session_converted(sessions[0], txns) is False
+
+    def test_not_converted_when_billing_after_transaction(self) -> None:
+        events = [
+            _record("e1", "ENTRY", hour=14, minute=0),
+            _record(
+                "e2",
+                "BILLING_QUEUE_JOIN",
+                zone_id="BILLING",
+                hour=14,
+                minute=15,
+                metadata={"queue_depth": 1},
+            ),
+        ]
+        sessions = build_sessions(events)
+        txns = [_pos("TXN_001", hour=14, minute=12)]
 
         assert is_session_converted(sessions[0], txns) is False
 

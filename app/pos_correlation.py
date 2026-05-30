@@ -16,8 +16,8 @@ def is_session_converted(
     transactions: Sequence[PosTransactionRecord],
 ) -> bool:
     """
-    Return True when a non-staff session reached billing and a POS transaction
-    occurred within 5 minutes after the session's first billing activity.
+    Return True when a non-staff session reached billing and billing activity
+    occurred within 5 minutes before a POS transaction (challenge PDF rule).
     """
     if session.is_staff or not session.reached_billing:
         return False
@@ -26,11 +26,11 @@ def is_session_converted(
     if billing_at is None:
         return False
 
-    window_end = billing_at + POS_CORRELATION_WINDOW
     for txn in transactions:
         if txn.store_id != session.store_id:
             continue
-        if billing_at <= txn.timestamp <= window_end:
+        window_start = txn.timestamp - POS_CORRELATION_WINDOW
+        if window_start <= billing_at <= txn.timestamp:
             return True
     return False
 

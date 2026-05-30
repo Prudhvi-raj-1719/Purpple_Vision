@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Sequence
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -75,6 +75,15 @@ SUGGESTED_ACTION_DEAD_ZONE = (
 )
 
 
+def _anomaly_detected_at(detected_at: datetime | None) -> datetime:
+    """UTC timestamp attached to each anomaly (request time by default)."""
+    if detected_at is not None:
+        if detected_at.tzinfo is None:
+            return detected_at.replace(tzinfo=timezone.utc)
+        return detected_at.astimezone(timezone.utc)
+    return datetime.now(timezone.utc)
+
+
 def count_non_staff_queue_joins(events: Sequence[EventRecord]) -> int:
     """Count BILLING_QUEUE_JOIN events excluding staff detections."""
     return sum(
@@ -84,8 +93,13 @@ def count_non_staff_queue_joins(events: Sequence[EventRecord]) -> int:
     )
 
 
-def detect_queue_spike(queue_joins: int) -> Anomaly | None:
+def detect_queue_spike(
+    queue_joins: int,
+    *,
+    detected_at: datetime | None = None,
+) -> Anomaly | None:
     """Flag unusually high billing queue join volume for the day."""
+    when = _anomaly_detected_at(detected_at)
     if queue_joins >= QUEUE_SPIKE_CRITICAL_JOINS:
         return Anomaly(
             anomaly_type=ANOMALY_QUEUE_SPIKE,
@@ -96,19 +110,21 @@ def detect_queue_spike(queue_joins: int) -> Anomaly | None:
                 f"of {QUEUE_SPIKE_CRITICAL_JOINS} for the day."
             ),
             suggested_action=SUGGESTED_ACTION_QUEUE_SPIKE,
+            detected_at=when,
             supporting_metrics={"queue_joins": queue_joins},
         )
 
     if queue_joins >= QUEUE_SPIKE_WARNING_JOINS:
         return Anomaly(
             anomaly_type=ANOMALY_QUEUE_SPIKE,
-            severity=AnomalySeverity.WARNING,
+            severity=AnomalySeverity.WARN,
             title="Billing queue spike detected",
             description=(
                 f"Queue joins ({queue_joins}) exceed the warning threshold "
                 f"of {QUEUE_SPIKE_WARNING_JOINS} for the day."
             ),
             suggested_action=SUGGESTED_ACTION_QUEUE_SPIKE,
+            detected_at=when,
             supporting_metrics={"queue_joins": queue_joins},
         )
 
@@ -118,6 +134,8 @@ def detect_queue_spike(queue_joins: int) -> Anomaly | None:
 def detect_conversion_drop(
     sessions: list,
     transactions: list[PosTransactionRecord],
+    *,
+    detected_at: datetime | None = None,
 ) -> Anomaly | None:
     """
     Flag low conversion when visitors reached billing but POS correlation is weak.
@@ -130,6 +148,7 @@ def detect_conversion_drop(
     if not billing_visitors:
         return None
 
+    when = _anomaly_detected_at(detected_at)
     unique_visitors = count_unique_visitors(sessions)
     converted_count = len(converted_visitor_ids(sessions, transactions))
     conversion_rate = compute_conversion_rate(sessions, transactions)
@@ -152,13 +171,14 @@ def detect_conversion_drop(
                 f"{len(billing_visitors)} visitor(s) reaching billing."
             ),
             suggested_action=SUGGESTED_ACTION_CONVERSION_DROP,
+            detected_at=when,
             supporting_metrics=metrics,
         )
 
     if conversion_rate < CONVERSION_DROP_WARNING_RATE:
         return Anomaly(
             anomaly_type=ANOMALY_CONVERSION_DROP,
-            severity=AnomalySeverity.WARNING,
+            severity=AnomalySeverity.WARN,
             title="Conversion drop detected",
             description=(
                 f"Conversion rate ({conversion_rate:.1%}) is below the warning "
@@ -166,13 +186,18 @@ def detect_conversion_drop(
                 f"{len(billing_visitors)} visitor(s) reaching billing."
             ),
             suggested_action=SUGGESTED_ACTION_CONVERSION_DROP,
+            detected_at=when,
             supporting_metrics=metrics,
         )
 
     return None
 
 
-def detect_dead_zones(zones: Sequence[HeatmapZone]) -> list[Anomaly]:
+def detect_dead_zones(
+    zones: Sequence[HeatmapZone],
+    *,
+    detected_at: datetime | None = None,
+) -> list[Anomaly]:
     """
     Flag zones with extremely low heatmap engagement vs the store peak zone.
 
@@ -182,6 +207,7 @@ def detect_dead_zones(zones: Sequence[HeatmapZone]) -> list[Anomaly]:
     if len(zones) < 2:
         return []
 
+    when = _anomaly_detected_at(detected_at)
     anomalies: list[Anomaly] = []
     for zone in zones:
         score = zone.normalized_score
@@ -197,6 +223,7 @@ def detect_dead_zones(zones: Sequence[HeatmapZone]) -> list[Anomaly]:
                         f"{DEAD_ZONE_CRITICAL_SCORE}."
                     ),
                     suggested_action=SUGGESTED_ACTION_DEAD_ZONE,
+                    detected_at=when,
                     supporting_metrics={
                         "zone_id": zone.zone_id,
                         "normalized_score": round(score, 2),
@@ -210,7 +237,7 @@ def detect_dead_zones(zones: Sequence[HeatmapZone]) -> list[Anomaly]:
             anomalies.append(
                 Anomaly(
                     anomaly_type=ANOMALY_DEAD_ZONE,
-                    severity=AnomalySeverity.WARNING,
+                    severity=AnomalySeverity.WARN,
                     title=f"Dead zone: {zone.zone_id}",
                     description=(
                         f"Zone {zone.zone_id} normalized engagement score "
@@ -218,6 +245,7 @@ def detect_dead_zones(zones: Sequence[HeatmapZone]) -> list[Anomaly]:
                         f"{DEAD_ZONE_WARNING_SCORE}."
                     ),
                     suggested_action=SUGGESTED_ACTION_DEAD_ZONE,
+                    detected_at=when,
                     supporting_metrics={
                         "zone_id": zone.zone_id,
                         "normalized_score": round(score, 2),
@@ -234,6 +262,8 @@ def detect_dead_zones(zones: Sequence[HeatmapZone]) -> list[Anomaly]:
 def detect_store_anomalies(
     events: list[EventRecord],
     transactions: list[PosTransactionRecord],
+    *,
+    detected_at: datetime | None = None,
 ) -> list[Anomaly]:
     """Run all anomaly detectors and return ordered results."""
     sessions = build_sessions(events)
@@ -243,15 +273,17 @@ def detect_store_anomalies(
 
     anomalies: list[Anomaly] = []
 
-    queue_anomaly = detect_queue_spike(queue_joins)
+    queue_anomaly = detect_queue_spike(queue_joins, detected_at=detected_at)
     if queue_anomaly is not None:
         anomalies.append(queue_anomaly)
 
-    conversion_anomaly = detect_conversion_drop(sessions, transactions)
+    conversion_anomaly = detect_conversion_drop(
+        sessions, transactions, detected_at=detected_at
+    )
     if conversion_anomaly is not None:
         anomalies.append(conversion_anomaly)
 
-    anomalies.extend(detect_dead_zones(heatmap_zones))
+    anomalies.extend(detect_dead_zones(heatmap_zones, detected_at=detected_at))
 
     return anomalies
 

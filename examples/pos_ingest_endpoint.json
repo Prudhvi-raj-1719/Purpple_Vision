@@ -1,0 +1,24 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/pos/ingest",
+    "body": {
+      "transactions": [
+        {
+          "store_id": "STORE_BLR_002",
+          "transaction_id": "TXN_00441",
+          "timestamp": "2026-03-03T14:12:00Z",
+          "basket_value_inr": 1240.0
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": "success",
+    "total_received": 1,
+    "transactions_ingested": 1,
+    "duplicates_skipped": 0,
+    "rejected": 0,
+    "errors": []
+  }
+}
