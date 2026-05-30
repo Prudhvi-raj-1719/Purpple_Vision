@@ -6,7 +6,7 @@ import json
 import os
 from collections.abc import Generator
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +22,7 @@ from sqlalchemy import (
     create_engine,
     event,
     inspect,
+    select,
 )
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
@@ -293,3 +294,48 @@ def pos_transaction_to_record(transaction: Any) -> PosTransactionRecord:
         timestamp=transaction.timestamp,
         basket_value_inr=transaction.basket_value_inr,
     )
+
+
+def utc_day_bounds(day: date) -> tuple[datetime, datetime]:
+    """Return inclusive UTC start and exclusive end for a calendar day."""
+    start = datetime.combine(day, time.min, tzinfo=timezone.utc)
+    end = datetime.combine(day, time.max, tzinfo=timezone.utc).replace(
+        microsecond=999999
+    )
+    return start, end
+
+
+def fetch_store_events(
+    session: Session,
+    store_id: str,
+    *,
+    day: date | None = None,
+) -> list[EventRecord]:
+    """Load store events ordered by timestamp, optionally filtered to one UTC day."""
+    stmt = select(EventRecord).where(EventRecord.store_id == store_id)
+    if day is not None:
+        day_start, day_end = utc_day_bounds(day)
+        stmt = stmt.where(
+            EventRecord.timestamp >= day_start,
+            EventRecord.timestamp <= day_end,
+        )
+    stmt = stmt.order_by(EventRecord.timestamp)
+    return list(session.scalars(stmt).all())
+
+
+def fetch_store_pos_transactions(
+    session: Session,
+    store_id: str,
+    *,
+    day: date | None = None,
+) -> list[PosTransactionRecord]:
+    """Load POS transactions for a store, optionally filtered to one UTC day."""
+    stmt = select(PosTransactionRecord).where(PosTransactionRecord.store_id == store_id)
+    if day is not None:
+        day_start, day_end = utc_day_bounds(day)
+        stmt = stmt.where(
+            PosTransactionRecord.timestamp >= day_start,
+            PosTransactionRecord.timestamp <= day_end,
+        )
+    stmt = stmt.order_by(PosTransactionRecord.timestamp)
+    return list(session.scalars(stmt).all())

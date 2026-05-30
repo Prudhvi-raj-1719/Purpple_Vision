@@ -282,17 +282,23 @@ class ZoneDwellMetric(BaseModel):
 
 
 class StoreMetricsResponse(BaseModel):
-    """GET /stores/{id}/metrics response shape."""
+    """GET /stores/{store_id}/metrics response (Phase 3B)."""
 
     model_config = _STRICT_MODEL_CONFIG
 
     store_id: str
-    date: str
+    date: str = Field(
+        description="UTC calendar day (YYYY-MM-DD) used for the metrics window.",
+    )
     unique_visitors: int = Field(ge=0)
     conversion_rate: float = Field(ge=0.0, le=1.0)
-    average_dwell_by_zone: list[ZoneDwellMetric] = Field(default_factory=list)
-    current_queue_depth: int = Field(ge=0)
+    average_dwell_time_ms: float = Field(
+        ge=0.0,
+        description="Mean total in-zone dwell per customer session (milliseconds).",
+    )
     queue_abandonment_rate: float = Field(ge=0.0, le=1.0)
+    billing_reach_rate: float = Field(ge=0.0, le=1.0)
+    total_sessions: int = Field(ge=0)
 
 
 class FunnelStage(BaseModel):

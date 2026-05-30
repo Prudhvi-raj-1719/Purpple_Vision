@@ -14,6 +14,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.db import init_db
 from app.health import router as health_router
 from app.ingestion import router as ingestion_router
+from app.metrics import router as metrics_router
 from app.models import ErrorResponse
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,7 @@ app = FastAPI(
 
 app.include_router(health_router)
 app.include_router(ingestion_router)
+app.include_router(metrics_router)
 
 
 @app.exception_handler(RequestValidationError)

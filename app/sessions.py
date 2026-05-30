@@ -42,6 +42,7 @@ class VisitorSession:
     reached_billing: bool = False
     joined_queue: bool = False
     abandoned_queue: bool = False
+    billing_activity_at: datetime | None = None
     total_dwell_ms_by_zone: dict[str, int] = field(default_factory=dict)
     event_count: int = 0
 
@@ -147,15 +148,23 @@ def _open_session(
     open_by_visitor[visitor_id] = session
 
 
+def _mark_billing_activity(session: VisitorSession, timestamp: datetime) -> None:
+    """Record the first billing-zone interaction timestamp for POS correlation."""
+    session.reached_billing = True
+    if session.billing_activity_at is None:
+        session.billing_activity_at = timestamp
+
+
 def _apply_session_event(session: VisitorSession, event: dict[str, Any]) -> None:
     """Update session state for a non-threshold event."""
     event_type: EventType = event["event_type"]
     zone_id: str | None = event["zone_id"]
+    timestamp: datetime = event["timestamp"]
 
     if event_type == EventType.ZONE_ENTER and zone_id:
         session.zones_visited.add(zone_id)
         if _is_billing_zone(zone_id):
-            session.reached_billing = True
+            _mark_billing_activity(session, timestamp)
 
     elif event_type == EventType.ZONE_DWELL and zone_id:
         session.zones_visited.add(zone_id)
@@ -163,16 +172,16 @@ def _apply_session_event(session: VisitorSession, event: dict[str, Any]) -> None
             session.total_dwell_ms_by_zone.get(zone_id, 0) + event["dwell_ms"]
         )
         if _is_billing_zone(zone_id):
-            session.reached_billing = True
+            _mark_billing_activity(session, timestamp)
 
     elif event_type == EventType.BILLING_QUEUE_JOIN:
-        session.reached_billing = True
+        _mark_billing_activity(session, timestamp)
         session.joined_queue = True
         if zone_id:
             session.zones_visited.add(zone_id)
 
     elif event_type == EventType.BILLING_QUEUE_ABANDON:
-        session.reached_billing = True
+        _mark_billing_activity(session, timestamp)
         session.abandoned_queue = True
         if zone_id:
             session.zones_visited.add(zone_id)
