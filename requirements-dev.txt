@@ -1,0 +1,3 @@
+# Optional dev-only tools — not required for docker compose up or submission.
+-r requirements.txt
+ruff==0.8.6

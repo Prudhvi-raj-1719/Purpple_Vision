@@ -1,0 +1,45 @@
+# =============================================================================
+# Store Intelligence — Runtime Dependencies (Python 3.11)
+# Pinned for 48-hour hackathon stability. Re-pin after intentional upgrades.
+# =============================================================================
+
+# --- Web API ---
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pydantic-settings==2.7.1
+python-multipart==0.0.20
+
+# --- Database (SQLite via stdlib sqlite3 — no async driver needed) ---
+sqlalchemy==2.0.36
+
+# --- HTTP Client (pipeline ingest + API tests) ---
+httpx==0.28.1
+
+# --- Environment & Config ---
+python-dotenv==1.0.1
+
+# --- Structured Logging ---
+structlog==24.4.0
+
+# --- Computer Vision & Detection ---
+# ultralytics pulls torch, torchvision, numpy, pillow, pyyaml, etc.
+# Do NOT pin torch separately — let ultralytics resolve a compatible CPU wheel.
+opencv-python-headless==4.10.0.84
+ultralytics==8.3.63
+numpy==1.26.4
+pillow==11.1.0
+
+# --- ByteTrack (Ultralytics tracker — lapx replaces lap on Windows) ---
+lapx==0.5.11
+
+# --- Data Processing (POS CSV + analytics helpers) ---
+pandas==2.2.3
+
+# --- Dashboard ---
+streamlit==1.41.1
+
+# --- Testing ---
+pytest==8.3.4
+pytest-asyncio==0.25.0
+pytest-cov==6.0.0
