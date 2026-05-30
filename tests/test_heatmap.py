@@ -1,3 +1,5 @@
+# PROMPT: Verify heatmap data_confidence flag when fewer than 20 customer sessions.
+# CHANGES MADE: Tests for data_confidence true/false on heatmap response.
 """Tests for store heatmap computation and GET /stores/{store_id}/heatmap."""
 
 from __future__ import annotations
@@ -11,9 +13,11 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.db import EventRecord, get_session
 from app.heatmap import (
+    MIN_SESSIONS_FOR_DATA_CONFIDENCE,
     ZoneAggregate,
     aggregate_zone_stats,
     build_heatmap_zones,
+    compute_data_confidence,
     compute_engagement_scores,
     compute_store_heatmap,
     normalize_scores,
@@ -207,6 +211,51 @@ class TestAggregateZoneStats:
         assert agg.unique_visitors == 1
 
 
+class TestDataConfidence:
+    def _session_events(self, visitor_id: str, index: int) -> list[EventRecord]:
+        base_minute = index * 2
+        return [
+            _record(f"en{index}", "ENTRY", visitor_id=visitor_id, hour=10, minute=base_minute),
+            _record(
+                f"zx{index}",
+                "ZONE_ENTER",
+                zone_id="SKINCARE",
+                visitor_id=visitor_id,
+                hour=10,
+                minute=base_minute + 1,
+            ),
+            _record(
+                f"ex{index}",
+                "EXIT",
+                visitor_id=visitor_id,
+                hour=10,
+                minute=base_minute + 2,
+            ),
+        ]
+
+    def test_data_confidence_false_below_threshold(self) -> None:
+        events: list[EventRecord] = []
+        for index in range(MIN_SESSIONS_FOR_DATA_CONFIDENCE - 1):
+            events.extend(self._session_events(f"VIS_dc{index}", index))
+
+        sessions = build_sessions(events)
+        assert compute_data_confidence(sessions) is False
+
+        result = compute_store_heatmap(STORE, METRIC_DATE, events)
+        assert result.data_confidence is False
+
+    def test_data_confidence_true_at_threshold(self) -> None:
+        events: list[EventRecord] = []
+        for index in range(MIN_SESSIONS_FOR_DATA_CONFIDENCE):
+            events.extend(self._session_events(f"VIS_ok{index}", index))
+
+        sessions = build_sessions(events)
+        assert compute_data_confidence(sessions) is True
+
+        result = compute_store_heatmap(STORE, METRIC_DATE, events)
+        assert result.data_confidence is True
+
+
 class TestHeatmapComputation:
     def test_happy_path_with_normalization(self) -> None:
         events = [
@@ -265,6 +314,7 @@ class TestHeatmapComputation:
         result = compute_store_heatmap(STORE, METRIC_DATE, [])
 
         assert result.zones == []
+        assert result.data_confidence is False
 
     def test_build_heatmap_zones_sorted_by_zone_id(self) -> None:
         aggregates = {
@@ -316,6 +366,7 @@ class TestHeatmapEndpoint:
         body = response.json()
         assert body["store_id"] == STORE
         assert body["date"] == DAY
+        assert body["data_confidence"] is False
         assert len(body["zones"]) == 1
         zone = body["zones"][0]
         assert zone["zone_id"] == "SKINCARE"

@@ -99,7 +99,7 @@ SQLite for the hackathon: one `docker compose up`, no DB service, file survives 
 
 **Choice:** JSON access logs via `RequestLoggingMiddleware` — `trace_id`, `endpoint`, `latency_ms`, `status_code`, optional `store_id` from path. No external log aggregator.
 
-**Gap:** PDF also mentions `event_count` on ingest logs — not yet added to avoid changing `ingestion.py` in late phases.
+**Ingest:** `POST /events/ingest` sets `request.state.event_count` to `total_received`; middleware includes it in structured access logs.
 
 ### Staff exclusion
 

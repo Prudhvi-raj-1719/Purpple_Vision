@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import date, datetime, timezone
+from typing import Sequence
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.exc import SQLAlchemyError
@@ -17,7 +19,7 @@ from app.db import (
     get_db,
     is_database_available,
 )
-from app.models import StoreMetricsResponse
+from app.models import StoreMetricsResponse, ZoneDwellMetric
 from app.pos_correlation import converted_visitor_ids
 from app.sessions import (
     VisitorSession,
@@ -63,6 +65,65 @@ def compute_queue_abandonment_rate(sessions: list[VisitorSession]) -> float:
     return abandoned / len(joined)
 
 
+def compute_average_dwell_by_zone(
+    sessions: list[VisitorSession],
+) -> list[ZoneDwellMetric]:
+    """
+    Mean dwell per zone across customer session visits.
+
+    Each session contributes at most one visit per zone; dwell is taken from
+    session.total_dwell_ms_by_zone (same basis as the heatmap endpoint).
+    """
+    totals: dict[str, int] = {}
+    visit_counts: dict[str, int] = {}
+
+    for session in customer_sessions(sessions):
+        for zone_id in session.zones_visited:
+            visit_counts[zone_id] = visit_counts.get(zone_id, 0) + 1
+            totals[zone_id] = totals.get(zone_id, 0) + session.total_dwell_ms_by_zone.get(
+                zone_id, 0
+            )
+
+    return [
+        ZoneDwellMetric(
+            zone_id=zone_id,
+            average_dwell_ms=(
+                0.0
+                if visit_counts[zone_id] == 0
+                else totals[zone_id] / visit_counts[zone_id]
+            ),
+        )
+        for zone_id in sorted(totals)
+    ]
+
+
+def compute_current_queue_depth(events: Sequence[EventRecord]) -> int:
+    """
+    Latest non-staff billing queue depth for the event window.
+
+    Uses metadata.queue_depth on the most recent BILLING_QUEUE_JOIN by timestamp.
+    Returns 0 when no qualifying queue-join events exist.
+    """
+    latest: EventRecord | None = None
+
+    for event in events:
+        if event.event_type != "BILLING_QUEUE_JOIN" or event.is_staff:
+            continue
+        if latest is None or event.timestamp > latest.timestamp:
+            latest = event
+
+    if latest is None:
+        return 0
+
+    metadata = json.loads(latest.metadata_json) if latest.metadata_json else {}
+    depth = metadata.get("queue_depth")
+    if isinstance(depth, int) and depth > 0:
+        return depth
+    if isinstance(depth, float) and depth > 0:
+        return int(depth)
+    return 0
+
+
 def compute_conversion_rate(
     sessions: list[VisitorSession],
     transactions: list[PosTransactionRecord],
@@ -96,6 +157,8 @@ def compute_store_metrics(
         unique_visitors=count_unique_visitors(sessions),
         conversion_rate=compute_conversion_rate(sessions, transactions),
         average_dwell_time_ms=compute_average_dwell_time_ms(sessions),
+        average_dwell_by_zone=compute_average_dwell_by_zone(sessions),
+        current_queue_depth=compute_current_queue_depth(events),
         queue_abandonment_rate=compute_queue_abandonment_rate(sessions),
         billing_reach_rate=compute_billing_reach_rate(sessions),
         total_sessions=len(customers),

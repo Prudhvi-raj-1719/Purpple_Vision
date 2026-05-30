@@ -23,6 +23,9 @@ router = APIRouter(prefix="/stores", tags=["heatmap"])
 # Dwell milliseconds are scaled to seconds when computing engagement score.
 DWELL_MS_TO_ENGAGEMENT_SECONDS = 1000.0
 
+# PDF: heatmap comparisons are unreliable below this customer session count.
+MIN_SESSIONS_FOR_DATA_CONFIDENCE = 20
+
 
 @dataclass
 class ZoneAggregate:
@@ -92,6 +95,11 @@ def normalize_scores(scores: dict[str, float]) -> dict[str, float]:
     }
 
 
+def compute_data_confidence(sessions: Sequence[VisitorSession]) -> bool:
+    """True when at least 20 customer sessions exist (PDF heatmap reliability gate)."""
+    return len(customer_sessions(sessions)) >= MIN_SESSIONS_FOR_DATA_CONFIDENCE
+
+
 def build_heatmap_zones(aggregates: dict[str, ZoneAggregate]) -> list[HeatmapZone]:
     """Convert aggregates to response models with normalized scores."""
     scores = compute_engagement_scores(aggregates)
@@ -127,6 +135,7 @@ def compute_store_heatmap(
         store_id=store_id,
         date=metric_date.isoformat(),
         zones=build_heatmap_zones(aggregates),
+        data_confidence=compute_data_confidence(sessions),
     )
 
 

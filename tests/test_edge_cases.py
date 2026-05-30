@@ -1,3 +1,5 @@
+# PROMPT: Verify structured logging includes event_count on POST /events/ingest.
+# CHANGES MADE: Ingest logging test; existing edge-case coverage retained.
 """Edge-case tests: empty store, staff-only clip, zero purchases, re-entry."""
 
 from __future__ import annotations
@@ -271,6 +273,48 @@ class TestStaleFeedDetection:
         assert response.status == "degraded"
         assert any(w.startswith("STALE_FEED:") for w in response.warnings)
         assert response.stores[0].stale is True
+
+
+class TestIngestLogging:
+    def test_ingest_logs_event_count(self, client: TestClient) -> None:
+        payload = {
+            "events": [
+                {
+                    "event_id": "550e8400-e29b-41d4-a716-446655440099",
+                    "store_id": STORE,
+                    "camera_id": "CAM_ENTRY_01",
+                    "visitor_id": "VIS_log1",
+                    "event_type": "ENTRY",
+                    "timestamp": "2026-03-03T14:00:00Z",
+                    "zone_id": None,
+                    "dwell_ms": 0,
+                    "is_staff": False,
+                    "confidence": 0.9,
+                    "metadata": {"session_seq": 1},
+                },
+                {
+                    "event_id": "550e8400-e29b-41d4-a716-446655440098",
+                    "store_id": STORE,
+                    "camera_id": "CAM_ENTRY_01",
+                    "visitor_id": "VIS_log2",
+                    "event_type": "ENTRY",
+                    "timestamp": "2026-03-03T14:05:00Z",
+                    "zone_id": None,
+                    "dwell_ms": 0,
+                    "is_staff": False,
+                    "confidence": 0.9,
+                    "metadata": {"session_seq": 1},
+                },
+            ]
+        }
+        with patch("app.logging_config.log_request") as mock_log:
+            response = client.post("/events/ingest", json=payload)
+
+        assert response.status_code == 200
+        assert response.json()["total_received"] == 2
+        mock_log.assert_called_once()
+        assert mock_log.call_args.kwargs["event_count"] == 2
+        assert mock_log.call_args.kwargs["endpoint"] == "/events/ingest"
 
 
 class TestRequestLogging:

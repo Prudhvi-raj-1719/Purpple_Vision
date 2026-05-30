@@ -1,3 +1,5 @@
+# PROMPT: Verify anomalies include PDF suggested_action for each alert type.
+# CHANGES MADE: Tests assert suggested_action on queue, conversion, and dead-zone anomalies.
 """Tests for store anomaly detection and GET /stores/{store_id}/anomalies."""
 
 from __future__ import annotations
@@ -19,6 +21,9 @@ from app.anomalies import (
     DEAD_ZONE_WARNING_SCORE,
     QUEUE_SPIKE_CRITICAL_JOINS,
     QUEUE_SPIKE_WARNING_JOINS,
+    SUGGESTED_ACTION_CONVERSION_DROP,
+    SUGGESTED_ACTION_DEAD_ZONE,
+    SUGGESTED_ACTION_QUEUE_SPIKE,
     compute_store_anomalies,
     count_non_staff_queue_joins,
     detect_conversion_drop,
@@ -126,6 +131,7 @@ class TestQueueSpikeDetection:
         assert result is not None
         assert result.anomaly_type == ANOMALY_QUEUE_SPIKE
         assert result.severity == AnomalySeverity.WARNING
+        assert result.suggested_action == SUGGESTED_ACTION_QUEUE_SPIKE
         assert result.supporting_metrics["queue_joins"] == QUEUE_SPIKE_WARNING_JOINS
 
     def test_critical_at_threshold(self) -> None:
@@ -188,6 +194,7 @@ class TestConversionDropDetection:
         assert result is not None
         assert result.anomaly_type == ANOMALY_CONVERSION_DROP
         assert result.severity == AnomalySeverity.CRITICAL
+        assert result.suggested_action == SUGGESTED_ACTION_CONVERSION_DROP
         assert result.supporting_metrics["conversion_rate"] == 0.0
 
     def test_warning_conversion_drop_with_partial_conversion(self) -> None:
@@ -249,6 +256,7 @@ class TestDeadZoneDetection:
         assert len(results) == 1
         assert results[0].anomaly_type == ANOMALY_DEAD_ZONE
         assert results[0].severity == AnomalySeverity.WARNING
+        assert results[0].suggested_action == SUGGESTED_ACTION_DEAD_ZONE
 
     def test_critical_dead_zone(self) -> None:
         zones = [
@@ -372,8 +380,11 @@ class TestAnomaliesEndpoint:
         response = client.get(f"/stores/{STORE}/anomalies?date={DAY}")
 
         assert response.status_code == 200
-        types = [a["anomaly_type"] for a in response.json()["anomalies"]]
+        anomalies = response.json()["anomalies"]
+        types = [a["anomaly_type"] for a in anomalies]
         assert ANOMALY_QUEUE_SPIKE in types
+        queue_alert = next(a for a in anomalies if a["anomaly_type"] == ANOMALY_QUEUE_SPIKE)
+        assert queue_alert["suggested_action"] == SUGGESTED_ACTION_QUEUE_SPIKE
 
     def test_get_anomalies_invalid_date_returns_422(self, client: TestClient) -> None:
         response = client.get(f"/stores/{STORE}/anomalies?date=bad-date")

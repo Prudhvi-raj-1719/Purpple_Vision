@@ -10,6 +10,7 @@
   "response": {
     "store_id": "STORE_BLR_002",
     "date": "2026-03-03",
+    "data_confidence": false,
     "zones": [
       {
         "zone_id": "BILLING",
@@ -28,5 +29,8 @@
         "normalized_score": 72.5
       }
     ]
+  },
+  "setup_notes": {
+    "data_confidence": "false when fewer than 20 customer sessions exist for the UTC day; true otherwise"
   }
 }

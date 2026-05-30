@@ -70,6 +70,7 @@ def log_request(
     latency_ms: float,
     status_code: int,
     store_id: str | None = None,
+    event_count: int | None = None,
 ) -> None:
     """Write a structured access log entry."""
     payload = {
@@ -80,6 +81,8 @@ def log_request(
     }
     if store_id is not None:
         payload["store_id"] = store_id
+    if event_count is not None:
+        payload["event_count"] = event_count
 
     record = logging.LogRecord(
         name=logger.name,
@@ -106,12 +109,14 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 
         latency_ms = (time.perf_counter() - start) * 1000.0
         store_id = extract_store_id(request.url.path)
+        event_count = getattr(request.state, "event_count", None)
         log_request(
             trace_id=trace_id,
             endpoint=request.url.path,
             latency_ms=latency_ms,
             status_code=response.status_code,
             store_id=store_id,
+            event_count=event_count,
         )
         response.headers["X-Trace-Id"] = trace_id
         return response

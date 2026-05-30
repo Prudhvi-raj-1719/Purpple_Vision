@@ -296,6 +296,17 @@ class StoreMetricsResponse(BaseModel):
         ge=0.0,
         description="Mean total in-zone dwell per customer session (milliseconds).",
     )
+    average_dwell_by_zone: list[ZoneDwellMetric] = Field(
+        default_factory=list,
+        description="Mean dwell per zone across customer session visits (milliseconds).",
+    )
+    current_queue_depth: int = Field(
+        ge=0,
+        description=(
+            "Queue depth from the latest non-staff BILLING_QUEUE_JOIN event "
+            "on the requested day; 0 when no queue joins were recorded."
+        ),
+    )
     queue_abandonment_rate: float = Field(ge=0.0, le=1.0)
     billing_reach_rate: float = Field(ge=0.0, le=1.0)
     total_sessions: int = Field(ge=0)
@@ -349,6 +360,12 @@ class StoreHeatmapResponse(BaseModel):
         description="UTC calendar day (YYYY-MM-DD) used for the heatmap window.",
     )
     zones: list[HeatmapZone]
+    data_confidence: bool = Field(
+        description=(
+            "True when at least 20 customer sessions exist for the day; "
+            "False when sample size is too small for reliable heatmap comparison."
+        ),
+    )
 
 
 class Anomaly(BaseModel):
@@ -360,6 +377,10 @@ class Anomaly(BaseModel):
     severity: AnomalySeverity
     title: str
     description: str
+    suggested_action: str = Field(
+        min_length=1,
+        description="Operational recommendation for store staff or managers.",
+    )
     supporting_metrics: dict[str, float | int | str] = Field(default_factory=dict)
 
 

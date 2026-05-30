@@ -63,6 +63,17 @@ DEAD_ZONE_WARNING_SCORE = 20.0
 # CRITICAL: zone is effectively unused relative to peak traffic areas.
 DEAD_ZONE_CRITICAL_SCORE = 10.0
 
+# Operational recommendations aligned with challenge PDF anomaly responses.
+SUGGESTED_ACTION_QUEUE_SPIKE = (
+    "Deploy additional billing staff or open express checkout lanes to reduce wait times."
+)
+SUGGESTED_ACTION_CONVERSION_DROP = (
+    "Investigate checkout friction, pricing displays, and POS availability at billing counters."
+)
+SUGGESTED_ACTION_DEAD_ZONE = (
+    "Review planogram, signage, and staffing for the underperforming zone; consider promotions."
+)
+
 
 def count_non_staff_queue_joins(events: Sequence[EventRecord]) -> int:
     """Count BILLING_QUEUE_JOIN events excluding staff detections."""
@@ -84,6 +95,7 @@ def detect_queue_spike(queue_joins: int) -> Anomaly | None:
                 f"Queue joins ({queue_joins}) exceed the critical threshold "
                 f"of {QUEUE_SPIKE_CRITICAL_JOINS} for the day."
             ),
+            suggested_action=SUGGESTED_ACTION_QUEUE_SPIKE,
             supporting_metrics={"queue_joins": queue_joins},
         )
 
@@ -96,6 +108,7 @@ def detect_queue_spike(queue_joins: int) -> Anomaly | None:
                 f"Queue joins ({queue_joins}) exceed the warning threshold "
                 f"of {QUEUE_SPIKE_WARNING_JOINS} for the day."
             ),
+            suggested_action=SUGGESTED_ACTION_QUEUE_SPIKE,
             supporting_metrics={"queue_joins": queue_joins},
         )
 
@@ -138,6 +151,7 @@ def detect_conversion_drop(
                 f"threshold of {CONVERSION_DROP_CRITICAL_RATE:.0%} despite "
                 f"{len(billing_visitors)} visitor(s) reaching billing."
             ),
+            suggested_action=SUGGESTED_ACTION_CONVERSION_DROP,
             supporting_metrics=metrics,
         )
 
@@ -151,6 +165,7 @@ def detect_conversion_drop(
                 f"threshold of {CONVERSION_DROP_WARNING_RATE:.0%} despite "
                 f"{len(billing_visitors)} visitor(s) reaching billing."
             ),
+            suggested_action=SUGGESTED_ACTION_CONVERSION_DROP,
             supporting_metrics=metrics,
         )
 
@@ -181,6 +196,7 @@ def detect_dead_zones(zones: Sequence[HeatmapZone]) -> list[Anomaly]:
                         f"({score:.1f}) is below the critical threshold of "
                         f"{DEAD_ZONE_CRITICAL_SCORE}."
                     ),
+                    suggested_action=SUGGESTED_ACTION_DEAD_ZONE,
                     supporting_metrics={
                         "zone_id": zone.zone_id,
                         "normalized_score": round(score, 2),
@@ -201,6 +217,7 @@ def detect_dead_zones(zones: Sequence[HeatmapZone]) -> list[Anomaly]:
                         f"({score:.1f}) is below the warning threshold of "
                         f"{DEAD_ZONE_WARNING_SCORE}."
                     ),
+                    suggested_action=SUGGESTED_ACTION_DEAD_ZONE,
                     supporting_metrics={
                         "zone_id": zone.zone_id,
                         "normalized_score": round(score, 2),

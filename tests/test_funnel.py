@@ -1,3 +1,5 @@
+# PROMPT: Verify visitor-level funnel stages and drop-off percentages.
+# CHANGES MADE: Funnel stage counts and REENTRY-safe unique visitor tests.
 """Tests for store funnel computation and GET /stores/{store_id}/funnel."""
 
 from __future__ import annotations

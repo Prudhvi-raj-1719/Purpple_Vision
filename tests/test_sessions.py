@@ -1,3 +1,5 @@
+# PROMPT: Verify visitor session rules (ENTRY/EXIT, REENTRY, staff, billing, queue).
+# CHANGES MADE: Session lifecycle tests for build_sessions and customer_sessions.
 """Tests for visitor session building from ingested events."""
 
 from __future__ import annotations

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -83,7 +83,10 @@ def _resolve_status(ingested: int, duplicates: int, rejected: int, total: int) -
         422: {"description": "Invalid batch structure"},
     },
 )
-def ingest_events(payload: EventIngestPayload) -> IngestStatusResponse:
+def ingest_events(
+    payload: EventIngestPayload,
+    request: Request,
+) -> IngestStatusResponse:
     """
     Ingest a batch of events with partial-success semantics.
 
@@ -96,7 +99,9 @@ def ingest_events(payload: EventIngestPayload) -> IngestStatusResponse:
             detail="Database is unavailable",
         )
 
-    return ingest_event_dicts(payload.events)
+    result = ingest_event_dicts(payload.events)
+    request.state.event_count = result.total_received
+    return result
 
 
 def ingest_event_dicts(raw_events: list[Any]) -> IngestStatusResponse:

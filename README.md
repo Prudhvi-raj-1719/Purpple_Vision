@@ -202,7 +202,7 @@ pytest --cov=app --cov-report=term-missing
 | `GET` | `/stores/{store_id}/heatmap?date=YYYY-MM-DD` | `app/heatmap.py` |
 | `GET` | `/stores/{store_id}/anomalies?date=YYYY-MM-DD` | `app/anomalies.py` |
 
-Example payloads: `examples/*.json`
+Example payloads: `examples/*.json` (metrics include `average_dwell_by_zone` and `current_queue_depth`; heatmap includes `data_confidence`; anomalies include `suggested_action`)
 
 ## Detection pipeline (not yet implemented)
 

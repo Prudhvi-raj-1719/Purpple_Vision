@@ -1,3 +1,5 @@
+# PROMPT: Verify store metrics match the challenge PDF (per-zone dwell, queue depth).
+# CHANGES MADE: Tests for average_dwell_by_zone and current_queue_depth on metrics API.
 """Tests for store metrics computation and GET /stores/{store_id}/metrics."""
 
 from __future__ import annotations
@@ -12,9 +14,11 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.db import EventRecord, PosTransactionRecord, get_session
 from app.metrics import (
+    compute_average_dwell_by_zone,
     compute_average_dwell_time_ms,
     compute_billing_reach_rate,
     compute_conversion_rate,
+    compute_current_queue_depth,
     compute_queue_abandonment_rate,
     compute_store_metrics,
 )
@@ -284,6 +288,110 @@ class TestMetricsComputation:
         assert result.total_sessions == 2
 
 
+class TestPdfMetricsFields:
+    def test_average_dwell_by_zone_per_visit(self) -> None:
+        events = [
+            _record("e1", "ENTRY", visitor_id="VIS_z1", hour=14),
+            _record(
+                "e2",
+                "ZONE_DWELL",
+                zone_id="SKINCARE",
+                dwell_ms=40_000,
+                visitor_id="VIS_z1",
+                hour=14,
+                minute=5,
+            ),
+            _record("e3", "ENTRY", visitor_id="VIS_z2", hour=15),
+            _record(
+                "e4",
+                "ZONE_DWELL",
+                zone_id="SKINCARE",
+                dwell_ms=20_000,
+                visitor_id="VIS_z2",
+                hour=15,
+                minute=5,
+            ),
+        ]
+        sessions = build_sessions(events)
+        by_zone = {metric.zone_id: metric.average_dwell_ms for metric in compute_average_dwell_by_zone(sessions)}
+
+        assert by_zone["SKINCARE"] == 30_000.0
+
+    def test_current_queue_depth_from_latest_join(self) -> None:
+        events = [
+            _record(
+                "e1",
+                "BILLING_QUEUE_JOIN",
+                zone_id="BILLING",
+                hour=14,
+                metadata={"queue_depth": 2},
+            ),
+            _record(
+                "e2",
+                "BILLING_QUEUE_JOIN",
+                zone_id="BILLING",
+                hour=14,
+                minute=10,
+                metadata={"queue_depth": 5},
+            ),
+        ]
+        assert compute_current_queue_depth(events) == 5
+
+    def test_current_queue_depth_zero_without_joins(self) -> None:
+        events = [_record("e1", "ENTRY", hour=14)]
+        assert compute_current_queue_depth(events) == 0
+
+    def test_current_queue_depth_ignores_staff_joins(self) -> None:
+        events = [
+            _record(
+                "e1",
+                "BILLING_QUEUE_JOIN",
+                zone_id="BILLING",
+                hour=14,
+                minute=10,
+                is_staff=True,
+                metadata={"queue_depth": 9},
+            ),
+            _record(
+                "e2",
+                "BILLING_QUEUE_JOIN",
+                zone_id="BILLING",
+                hour=14,
+                metadata={"queue_depth": 3},
+            ),
+        ]
+        assert compute_current_queue_depth(events) == 3
+
+    def test_store_metrics_includes_pdf_fields(self) -> None:
+        events = [
+            _record("e1", "ENTRY", visitor_id="VIS_m1", hour=14),
+            _record(
+                "e2",
+                "ZONE_DWELL",
+                zone_id="SKINCARE",
+                dwell_ms=30_000,
+                visitor_id="VIS_m1",
+                hour=14,
+                minute=5,
+            ),
+            _record(
+                "e3",
+                "BILLING_QUEUE_JOIN",
+                zone_id="BILLING",
+                visitor_id="VIS_m1",
+                hour=14,
+                minute=10,
+                metadata={"queue_depth": 4},
+            ),
+        ]
+        result = compute_store_metrics(STORE, METRIC_DATE, events, [])
+
+        assert result.current_queue_depth == 4
+        by_zone = {z.zone_id: z.average_dwell_ms for z in result.average_dwell_by_zone}
+        assert by_zone["SKINCARE"] == 30_000.0
+        assert by_zone["BILLING"] == 0.0
+
+
 class TestMetricsEndpoint:
     def test_get_metrics_returns_json_for_store(
         self, client: TestClient
@@ -313,6 +421,9 @@ class TestMetricsEndpoint:
         assert body["conversion_rate"] == 1.0
         assert body["total_sessions"] == 1
         assert "average_dwell_time_ms" in body
+        assert "average_dwell_by_zone" in body
+        assert "current_queue_depth" in body
+        assert body["current_queue_depth"] == 1
         assert "billing_reach_rate" in body
         assert "queue_abandonment_rate" in body
 

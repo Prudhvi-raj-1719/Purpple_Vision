@@ -172,7 +172,6 @@ Helpers: `build_sessions()`, `count_unique_visitors()`, `customer_sessions()`.
 ## 11. Known gaps (design level)
 
 - CV pipeline not connected to ingest.
-- PDF metrics fields `average_dwell_by_zone` and `current_queue_depth` not exposed (aggregated alternatives implemented).
-- Anomalies use fixed thresholds, not 7-day rolling averages or 30-minute dead-zone timers per PDF wording.
-- Test files do not yet include `# PROMPT:` blocks required by Part D.
+- Anomalies use fixed thresholds, not 7-day rolling averages or 30-minute dead-zone timers per PDF wording (requires multi-day / sub-hour event streams).
+- Funnel does not expose a separate “Billing Queue” stage (`joined_queue` vs `reached_billing`).
 - `CHOICES.md` documents model and storage decisions; detection choice is provisional until pipeline is built.

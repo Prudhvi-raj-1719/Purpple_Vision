@@ -1,3 +1,5 @@
+# PROMPT: Verify POST /events/ingest idempotency and partial-success batch handling.
+# CHANGES MADE: Ingest validation and duplicate-skip tests per challenge schema.
 """Tests for POST /events/ingest idempotency and partial-success handling."""
 
 from __future__ import annotations

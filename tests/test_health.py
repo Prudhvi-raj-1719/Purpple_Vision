@@ -1,3 +1,5 @@
+# PROMPT: Verify health endpoint status, per-store feeds, and STALE_FEED warnings.
+# CHANGES MADE: Health and stale-feed tests for production readiness.
 """Tests for GET /health endpoint."""
 
 from __future__ import annotations

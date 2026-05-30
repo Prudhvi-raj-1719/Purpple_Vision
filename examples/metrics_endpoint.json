@@ -13,12 +13,20 @@
     "unique_visitors": 2,
     "conversion_rate": 0.5,
     "average_dwell_time_ms": 15000.0,
+    "average_dwell_by_zone": [
+      {
+        "zone_id": "SKINCARE",
+        "average_dwell_ms": 15000.0
+      }
+    ],
+    "current_queue_depth": 2,
     "queue_abandonment_rate": 0.0,
     "billing_reach_rate": 0.5,
     "total_sessions": 2
   },
   "setup_notes": {
     "events": "POST /events/ingest with ENTRY, ZONE_DWELL, BILLING_QUEUE_JOIN, EXIT for the same UTC day",
-    "pos": "Insert matching rows into pos_transactions (or future POS ingest) with timestamp within 5 minutes after billing_activity_at"
+    "pos": "Insert matching rows into pos_transactions (or future POS ingest) with timestamp within 5 minutes after billing_activity_at",
+    "current_queue_depth": "Taken from metadata.queue_depth on the latest non-staff BILLING_QUEUE_JOIN for the day"
   }
 }

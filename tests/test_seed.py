@@ -1,3 +1,5 @@
+# PROMPT: Verify seed script idempotently loads sample JSONL and POS CSV.
+# CHANGES MADE: Seed idempotency test for bootstrap data workflow.
 """Tests for scripts/seed_from_sample.py idempotent seeding."""
 
 from __future__ import annotations
