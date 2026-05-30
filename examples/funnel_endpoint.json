@@ -1,0 +1,37 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/stores/STORE_BLR_002/funnel",
+    "query": {
+      "date": "2026-03-03"
+    },
+    "description": "Optional date defaults to current UTC day when omitted."
+  },
+  "response": {
+    "store_id": "STORE_BLR_002",
+    "date": "2026-03-03",
+    "stages": [
+      {
+        "stage": "unique_visitors",
+        "count": 3,
+        "drop_off_pct": null
+      },
+      {
+        "stage": "reached_any_zone",
+        "count": 2,
+        "drop_off_pct": 33.333333333333336
+      },
+      {
+        "stage": "reached_billing",
+        "count": 1,
+        "drop_off_pct": 50.0
+      },
+      {
+        "stage": "converted_visitors",
+        "count": 1,
+        "drop_off_pct": 0.0
+      }
+    ],
+    "overall_conversion_rate": 0.3333333333333333
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/stores/STORE_BLR_002/anomalies",
+    "query": {
+      "date": "2026-03-03"
+    },
+    "description": "Optional date defaults to current UTC day when omitted."
+  },
+  "response": {
+    "store_id": "STORE_BLR_002",
+    "date": "2026-03-03",
+    "anomalies": [
+      {
+        "anomaly_type": "QUEUE_SPIKE",
+        "severity": "WARNING",
+        "title": "Billing queue spike detected",
+        "description": "Queue joins (12) exceed the warning threshold of 10 for the day.",
+        "supporting_metrics": {
+          "queue_joins": 12
+        }
+      },
+      {
+        "anomaly_type": "CONVERSION_DROP",
+        "severity": "CRITICAL",
+        "title": "Critical conversion drop detected",
+        "description": "Conversion rate (5.0%) is below the critical threshold of 10% despite 8 visitor(s) reaching billing.",
+        "supporting_metrics": {
+          "conversion_rate": 0.05,
+          "unique_visitors": 20,
+          "converted_visitors": 1,
+          "visitors_reached_billing": 8
+        }
+      },
+      {
+        "anomaly_type": "DEAD_ZONE",
+        "severity": "WARNING",
+        "title": "Dead zone: ELECTRONICS",
+        "description": "Zone ELECTRONICS normalized engagement score (15.0) is below the warning threshold of 20.0.",
+        "supporting_metrics": {
+          "zone_id": "ELECTRONICS",
+          "normalized_score": 15.0,
+          "visit_count": 1,
+          "unique_visitors": 1,
+          "total_dwell_time_ms": 0
+        }
+      }
+    ]
+  }
+}

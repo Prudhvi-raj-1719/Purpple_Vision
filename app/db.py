@@ -21,6 +21,7 @@ from sqlalchemy import (
     Text,
     create_engine,
     event,
+    func,
     inspect,
     select,
 )
@@ -339,3 +340,23 @@ def fetch_store_pos_transactions(
         )
     stmt = stmt.order_by(PosTransactionRecord.timestamp)
     return list(session.scalars(stmt).all())
+
+
+def fetch_store_feed_statuses(session: Session) -> list[tuple[str, datetime | None, datetime | None]]:
+    """
+    Return per-store (store_id, last_event_at, last_ingested_at).
+
+    last_event_at is the latest event timestamp; last_ingested_at is the latest
+    ingest time used for STALE_FEED lag detection.
+    """
+    stmt = (
+        select(
+            EventRecord.store_id,
+            func.max(EventRecord.timestamp),
+            func.max(EventRecord.ingested_at),
+        )
+        .group_by(EventRecord.store_id)
+        .order_by(EventRecord.store_id)
+    )
+    rows = session.execute(stmt).all()
+    return [(row[0], row[1], row[2]) for row in rows]

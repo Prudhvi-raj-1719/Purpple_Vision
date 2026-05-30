@@ -1,0 +1,32 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/stores/STORE_BLR_002/heatmap",
+    "query": {
+      "date": "2026-03-03"
+    },
+    "description": "Optional date defaults to current UTC day when omitted."
+  },
+  "response": {
+    "store_id": "STORE_BLR_002",
+    "date": "2026-03-03",
+    "zones": [
+      {
+        "zone_id": "BILLING",
+        "visit_count": 1,
+        "unique_visitors": 1,
+        "total_dwell_time_ms": 30000,
+        "average_dwell_time_ms": 30000.0,
+        "normalized_score": 100.0
+      },
+      {
+        "zone_id": "SKINCARE",
+        "visit_count": 2,
+        "unique_visitors": 2,
+        "total_dwell_time_ms": 45000,
+        "average_dwell_time_ms": 22500.0,
+        "normalized_score": 72.5
+      }
+    ]
+  }
+}

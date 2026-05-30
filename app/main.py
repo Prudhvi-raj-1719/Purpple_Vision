@@ -14,9 +14,14 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.db import init_db
 from app.health import router as health_router
 from app.ingestion import router as ingestion_router
+from app.anomalies import router as anomalies_router
+from app.funnel import router as funnel_router
+from app.heatmap import router as heatmap_router
+from app.logging_config import RequestLoggingMiddleware, configure_logging
 from app.metrics import router as metrics_router
 from app.models import ErrorResponse
 
+configure_logging()
 logger = logging.getLogger(__name__)
 
 
@@ -38,9 +43,19 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.add_middleware(RequestLoggingMiddleware)
+
 app.include_router(health_router)
 app.include_router(ingestion_router)
 app.include_router(metrics_router)
+app.include_router(funnel_router)
+app.include_router(heatmap_router)
+app.include_router(anomalies_router)
+
+
+def _trace_id_from_request(request: Request) -> str | None:
+    trace_id = getattr(request.state, "trace_id", None)
+    return str(trace_id) if trace_id is not None else None
 
 
 @app.exception_handler(RequestValidationError)
@@ -53,6 +68,7 @@ async def validation_exception_handler(
         content=ErrorResponse(
             error="validation_error",
             detail=str(exc.errors()),
+            trace_id=_trace_id_from_request(request),
         ).model_dump(mode="json"),
     )
 
@@ -68,6 +84,7 @@ async def sqlalchemy_exception_handler(
         content=ErrorResponse(
             error="database_unavailable",
             detail="A database error occurred",
+            trace_id=_trace_id_from_request(request),
         ).model_dump(mode="json"),
     )
 
@@ -81,5 +98,6 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
         content=ErrorResponse(
             error="internal_server_error",
             detail="An unexpected error occurred",
+            trace_id=_trace_id_from_request(request),
         ).model_dump(mode="json"),
     )

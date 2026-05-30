@@ -32,7 +32,7 @@ class AnomalySeverity(StrEnum):
     """Severity levels for store anomaly alerts."""
 
     INFO = "INFO"
-    WARN = "WARN"
+    WARNING = "WARNING"
     CRITICAL = "CRITICAL"
 
 
@@ -310,53 +310,68 @@ class FunnelStage(BaseModel):
 
 
 class StoreFunnelResponse(BaseModel):
-    """GET /stores/{id}/funnel response shape."""
+    """GET /stores/{store_id}/funnel response (Phase 4A)."""
 
     model_config = _STRICT_MODEL_CONFIG
 
     store_id: str
-    date: str
+    date: str = Field(
+        description="UTC calendar day (YYYY-MM-DD) used for the funnel window.",
+    )
     stages: list[FunnelStage]
+    overall_conversion_rate: float = Field(
+        ge=0.0,
+        le=1.0,
+        description="Converted visitors ÷ unique visitors (North Star).",
+    )
 
 
 class HeatmapZone(BaseModel):
+    """Per-zone heatmap metrics for GET /stores/{store_id}/heatmap (Phase 4B)."""
+
     model_config = _STRICT_MODEL_CONFIG
 
     zone_id: str
-    visit_frequency: int = Field(ge=0)
-    average_dwell_ms: float = Field(ge=0.0)
+    visit_count: int = Field(ge=0)
+    unique_visitors: int = Field(ge=0)
+    total_dwell_time_ms: int = Field(ge=0)
+    average_dwell_time_ms: float = Field(ge=0.0)
     normalized_score: float = Field(ge=0.0, le=100.0)
 
 
 class StoreHeatmapResponse(BaseModel):
-    """GET /stores/{id}/heatmap response shape."""
+    """GET /stores/{store_id}/heatmap response (Phase 4B)."""
 
     model_config = _STRICT_MODEL_CONFIG
 
     store_id: str
-    date: str
-    zones: list[HeatmapZone]
-    data_confidence: bool = Field(
-        description="False when fewer than 20 sessions exist in the window."
+    date: str = Field(
+        description="UTC calendar day (YYYY-MM-DD) used for the heatmap window.",
     )
+    zones: list[HeatmapZone]
 
 
 class Anomaly(BaseModel):
+    """Single detected store anomaly (Phase 4C)."""
+
     model_config = _STRICT_MODEL_CONFIG
 
     anomaly_type: str
     severity: AnomalySeverity
-    message: str
-    suggested_action: str
-    detected_at: datetime
+    title: str
+    description: str
+    supporting_metrics: dict[str, float | int | str] = Field(default_factory=dict)
 
 
 class StoreAnomaliesResponse(BaseModel):
-    """GET /stores/{id}/anomalies response shape."""
+    """GET /stores/{store_id}/anomalies response (Phase 4C)."""
 
     model_config = _STRICT_MODEL_CONFIG
 
     store_id: str
+    date: str = Field(
+        description="UTC calendar day (YYYY-MM-DD) used for the anomaly window.",
+    )
     anomalies: list[Anomaly]
 
 
@@ -369,11 +384,15 @@ class StoreFeedStatus(BaseModel):
 
 
 class HealthResponse(BaseModel):
-    """GET /health response shape."""
+    """GET /health response (Phase 4D)."""
 
     model_config = _STRICT_MODEL_CONFIG
 
     status: str
+    database_available: bool
+    timestamp: datetime = Field(
+        description="UTC timestamp when the health check was performed.",
+    )
     stores: list[StoreFeedStatus]
     warnings: list[str] = Field(default_factory=list)
 
