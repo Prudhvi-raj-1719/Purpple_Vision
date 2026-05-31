@@ -1,100 +1,140 @@
-# Design Document — Store Intelligence (Purpple_Vision)
+# Design Document — Purpple Vision
 
-## 1. System Overview
+## 1. System overview
 
-Purpple_Vision is an end-to-end **Store Intelligence System** for Apex Retail. The intended production flow is:
+Purpple Vision is a **Store Intelligence System** for Apex Retail. Production flow:
 
-**CCTV clips → Detection pipeline → JSON event stream → Intelligence API → (optional) live dashboard**
+**CCTV clips → Detection pipeline → JSON events → Intelligence API → Streamlit dashboard**
 
-The **North Star metric** is offline conversion rate:
+**North Star metric:**
 
 ```
 Conversion Rate = Visitors who completed a purchase ÷ Total unique visitors
 ```
 
-At submission time, the **Intelligence API** is fully implemented: it ingests schema-compliant behavioural events, persists them in SQLite, derives in-memory visitor sessions, correlates POS transactions, and exposes metrics, funnel, heatmap, anomaly, and health endpoints. The **computer-vision pipeline** (`pipeline/`) and **Streamlit dashboard** are scaffolded but not yet implemented; events can be loaded via `POST /events/ingest` or `scripts/seed_from_sample.py`.
+A visitor converts when they reached billing and `billing_activity_at` falls within **5 minutes before** a same-store POS transaction (`app/pos_correlation.py`).
 
 ---
 
-## 2. Architecture
+## 2. System architecture
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│  pipeline/  (planned)                                                   │
-│  detect.py → tracker.py → zones.py → entry_exit.py → emit.py           │
-│  Output: sample_events.jsonl (schema in app/models.py)                  │
-└───────────────────────────────┬─────────────────────────────────────────┘
-                                │ HTTP POST /events/ingest
-                                ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│  app/ingestion.py          Batch validate + idempotent persist          │
-│  app/models.py             Pydantic v2 contracts                        │
-└───────────────────────────────┬─────────────────────────────────────────┘
-                                ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│  app/db.py                 SQLite (events, pos_transactions)          │
-└───────────────────────────────┬─────────────────────────────────────────┘
-                                ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│  app/sessions.py           build_sessions() → VisitorSession[]          │
-│  (in-memory; not a DB table)                                            │
-└───────────────────────────────┬─────────────────────────────────────────┘
-                                ▼
-        ┌───────────────────────┼───────────────────────┐
-        ▼                       ▼                       ▼
-  app/metrics.py          app/funnel.py           app/heatmap.py
-  app/pos_correlation.py  app/anomalies.py        app/health.py
-        └───────────────────────┴───────────────────────┘
-                                ▼
-                    FastAPI JSON responses
+```mermaid
+flowchart TB
+    subgraph cv ["Computer vision (pipeline/)"]
+        DET[detect.py YOLO11m]
+        TRK[tracker.py ByteTrack]
+        ZON[zones.py polygons]
+        DWL[dwell.py CAM1/2]
+        ENT[entry_exit.py CAM3]
+        QUE[queue.py CAM5]
+        EMIT[emit.py + event_adapter]
+        DET --> TRK --> ZON
+        ZON --> DWL & ENT & QUE --> EMIT
+    end
+
+    subgraph files ["Generated artifacts"]
+        JSONL[pipeline_demo/*.jsonl]
+        POSCSV[purpple_pos_transactions.csv]
+    end
+
+    subgraph ingest ["Ingestion"]
+        HTTP[POST /events/ingest\nPOST /pos/ingest]
+        BRIDGE[bridge_pipeline_to_product.py]
+        SEED[seed_from_sample.py]
+    end
+
+    subgraph store ["Persistence"]
+        DB[(SQLite\nevents\npos_transactions)]
+    end
+
+    subgraph analytics ["Analytics (in-memory sessions)"]
+        SESS[build_sessions]
+        M[metrics] & F[funnel] & H[heatmap] & A[anomalies]
+    end
+
+    subgraph ui ["Presentation"]
+        API[FastAPI JSON]
+        ST[Streamlit dashboard]
+    end
+
+    EMIT --> JSONL
+    JSONL --> BRIDGE --> DB
+    JSONL -.-> HTTP
+    POSCSV --> BRIDGE
+    SEED --> DB
+    HTTP --> DB
+    DB --> SESS --> M & F & H & A --> API --> ST
 ```
 
-**Cross-cutting:** `app/logging_config.py` (structured request logs), `app/main.py` (middleware, global 503 handlers).
+### Cross-cutting concerns
+
+- **Logging:** JSON access logs via `RequestLoggingMiddleware` (`trace_id`, latency, `store_id`).
+- **Errors:** Global handlers return structured `ErrorResponse` with HTTP 503 on database failures.
+- **Health:** `GET /health` reports DB availability and per-store feed staleness.
 
 ---
 
-## 3. Component Breakdown
+## 3. Component breakdown
 
-### 3.1 Detection pipeline (`pipeline/`) — planned
+### 3.1 Detection pipeline (`pipeline/`)
 
-Modules exist as stubs: `detect.py`, `tracker.py`, `zones.py`, `entry_exit.py`, `dwell.py`, `queue.py`, `staff.py`, `emit.py`, `pos_loader.py`. The planned stack is YOLOv8 + ByteTrack, zone polygons from `store_layout.json`, and JSONL emission matching `Event` in `app/models.py`. Until this is built, validation and analytics are tested with synthetic events and optional dataset files under `./data/`.
+| Module | Role | Status |
+|--------|------|--------|
+| `detect.py` | YOLO11m person detection | Implemented |
+| `tracker.py` | ByteTrack multi-object tracking | Implemented |
+| `zones.py` | Polygon overlap zone assignment | Implemented |
+| `dwell.py` | ZONE_ENTER / EXIT / DWELL_COMPLETED (CAM1/2) | Implemented |
+| `entry_exit.py` | ENTRY / EXIT / REENTRY line crossing (CAM3) | Implemented |
+| `queue.py` | Queue + payment zone events (CAM5) | Implemented |
+| `emit.py` | NOTEBK → Purpple JSONL via `event_adapter` | Implemented |
+| `pos_loader.py` | Brigade CSV → invoice aggregation | Implemented |
+| `purchase_matching.py` | Offline invoice ↔ CCTV matching | Implemented (not in API) |
+| `staff.py` | Staff vs customer classification | **Stub** |
+| `config.py` | Camera geometry, clip anchors, paths | Implemented |
+
+Processors run frame-skipped inference (`PROCESS_EVERY_N_FRAMES = 10`) for performance parity across cameras.
 
 ### 3.2 Intelligence API (`app/`)
 
 | Module | Responsibility |
 |--------|----------------|
-| `main.py` | FastAPI app, lifespan `init_db()`, logging middleware, exception handlers |
-| `ingestion.py` | `POST /events/ingest` — up to 500 events, partial success, idempotent by `event_id` |
-| `sessions.py` | Session lifecycle from ENTRY/REENTRY through EXIT |
-| `pos_correlation.py` | Match billing activity to POS within 5-minute window |
+| `main.py` | FastAPI app, lifespan `init_db()`, middleware, exception handlers |
+| `ingestion.py` | `POST /events/ingest` — batch 1–500, idempotent on `event_id` |
+| `pos_ingestion.py` | `POST /pos/ingest` — idempotent on `transaction_id` |
+| `sessions.py` | Session lifecycle ENTRY/REENTRY → EXIT |
+| `pos_correlation.py` | Billing ↔ POS 5-minute window |
 | `metrics.py` | `GET /stores/{id}/metrics` |
 | `funnel.py` | `GET /stores/{id}/funnel` |
 | `heatmap.py` | `GET /stores/{id}/heatmap` |
 | `anomalies.py` | `GET /stores/{id}/anomalies` |
-| `health.py` | `GET /health` with per-store feeds and STALE_FEED |
+| `health.py` | `GET /health` |
 
-All store analytics accept optional `?date=YYYY-MM-DD` (UTC day, default today).
+All store analytics accept optional `?date=YYYY-MM-DD` (UTC day; default today).
 
 ### 3.3 Data layer (`app/db.py`)
 
-- **Engine:** SQLite file at `./data/store_intelligence.db` (configurable via `DATABASE_URL`).
+- **Engine:** SQLite at `./data/store_intelligence.db` (`DATABASE_URL` override).
 - **Tables:** `events` (PK `event_id`), `pos_transactions` (PK `transaction_id`).
-- **No Alembic:** tables created on startup via `init_db()`.
-- **Sessions:** derived at query time, not persisted.
+- **Sessions:** Derived at query time — no `visitor_sessions` table.
+- **Init:** `init_db()` on startup; no Alembic migrations.
 
-### 3.4 Dashboard (`dashboard/`) — planned
+### 3.4 Dashboard (`dashboard/`)
 
-`streamlit_app.py` is a stub. Docker Compose exposes an optional `dashboard` profile that depends on a healthy API container.
+- **`streamlit_app.py`:** Calls FastAPI only (no direct SQLite). KPIs, funnel, heatmap, anomalies; empty-state when `total_sessions = 0`.
+- **`terminal_dashboard.py`:** Stub (planned `rich` alternative).
+- **Docker:** Optional `dashboard` compose profile on port 8501.
 
 ---
 
 ## 4. Event schema
 
-Events are defined in `app/models.py` as Pydantic `Event` models. Required fields: `event_id` (UUID v4), `store_id`, `camera_id`, `visitor_id`, `event_type`, `timestamp` (UTC), `zone_id`, `dwell_ms`, `is_staff`, `confidence`, `metadata`.
+Defined in `app/models.py` (`Event`, `EventType`):
 
-**Event types:** ENTRY, EXIT, REENTRY, ZONE_ENTER, ZONE_EXIT, ZONE_DWELL (≥30s dwell), BILLING_QUEUE_JOIN (requires `metadata.queue_depth > 0`), BILLING_QUEUE_ABANDON.
+**Types:** ENTRY, EXIT, REENTRY, ZONE_ENTER, ZONE_EXIT, ZONE_DWELL (≥30s), BILLING_QUEUE_JOIN (`metadata.queue_depth > 0`), BILLING_QUEUE_ABANDON.
 
-Validation enforces zone presence rules and retains low-confidence events (confidence is stored, not used to drop).
+**Rules:** Zone required/absent per event type; UUID v4 `event_id`; UTC timestamps; low-confidence events retained (not dropped).
+
+Pipeline NOTEBK types map via `pipeline/event_adapter.py` (e.g. `DWELL_COMPLETED` → `ZONE_DWELL`, `QUEUE_ENTER` → `BILLING_QUEUE_JOIN`).
 
 ---
 
@@ -102,75 +142,183 @@ Validation enforces zone presence rules and retains low-confidence events (confi
 
 Implemented in `app/sessions.py`:
 
-- A **session** opens on ENTRY or REENTRY and closes on EXIT.
-- **REENTRY** creates a new session for the same `visitor_id` without double-counting unique visitors.
-- **Staff** sessions are built but excluded from customer analytics via `customer_sessions()`.
-- Session fields include `zones_visited`, `reached_billing`, `joined_queue`, `abandoned_queue`, `billing_activity_at`, and `total_dwell_ms_by_zone`.
+| Rule | Behavior |
+|------|----------|
+| Open | ENTRY or REENTRY |
+| Close | EXIT |
+| Orphan zone/queue events | Ignored (no open session) |
+| REENTRY | New session; unique visitor count unchanged |
+| Staff | Sessions built; excluded via `customer_sessions()` |
+| Billing | `BILLING` zone or queue events set `reached_billing` |
 
-Helpers: `build_sessions()`, `count_unique_visitors()`, `customer_sessions()`.
+Session fields: `zones_visited`, `joined_queue`, `abandoned_queue`, `billing_activity_at`, `total_dwell_ms_by_zone`.
 
 ---
 
-## 6. Analytics logic (summary)
+## 6. Analytics summary
 
 | Endpoint | Core logic |
 |----------|------------|
-| **Metrics** | Unique visitors, conversion rate (POS correlation), mean dwell per session, queue abandonment rate, billing reach rate, session count |
-| **Funnel** | Visitor-level stages: unique → any zone → billing → converted; drop-off % between stages |
-| **Heatmap** | Per-zone visits, dwell, engagement score; normalized 0–100 vs peak zone |
-| **Anomalies** | Queue spike (join count), conversion drop (fixed thresholds), dead zone (low normalized heatmap score) |
+| **Metrics** | Unique visitors, conversion, dwell, queue abandonment, billing reach, session count |
+| **Funnel** | Visitor-level: unique → any zone → billing queue → converted; drop-off % |
+| **Heatmap** | Per-zone visits, dwell, engagement score normalized 0–100 vs peak zone |
+| **Anomalies** | Queue spike, conversion drop, dead zone (fixed thresholds) |
 
-**POS correlation** (`app/pos_correlation.py`): a session converts if it reached billing and a same-store POS transaction occurs within five minutes after `billing_activity_at`.
+**Funnel stages:** `unique_visitors` → `reached_any_zone` → `billing_queue` → `converted_visitors`
+
+**Heatmap confidence:** `data_confidence = true` when ≥ 20 customer sessions on the requested day.
 
 ---
 
 ## 7. Data flow
 
-1. **Ingest:** Client sends `{ "events": [ ... ] }` to `POST /events/ingest`.
-2. **Persist:** Valid events stored in `events`; duplicates skipped by `event_id`.
-3. **Query:** Endpoints load events (and POS rows) for `store_id` + UTC day.
-4. **Derive:** `build_sessions(events)` → analytics functions → Pydantic response models.
-5. **Seed (dev):** `python scripts/seed_from_sample.py` loads `data/sample_events.jsonl` and `data/pos_transactions.csv` when present.
+1. Pipeline processors emit NOTEBK JSONL; `PipelineEmitter` writes Purpple-schema JSONL.
+2. `scripts/bridge_pipeline_to_product.py` or `POST /events/ingest` persists events.
+3. POS via `pos_loader` → CSV → bridge or `POST /pos/ingest`.
+4. Analytics endpoints load day-scoped rows, call `build_sessions()`, compute metrics.
+5. Streamlit fetches JSON from GET endpoints.
 
 ---
 
 ## 8. Deployment
 
-- **Docker:** `Dockerfile` runs `uvicorn app.main:app` on port 8000.
-- **Compose:** `docker compose up --build` starts the `api` service; `./data` and `./logs` are bind-mounted.
-- **Healthcheck:** Compose probes `GET /health` inside the container.
-- **Environment:** `DATABASE_URL`, `LOG_LEVEL`, `LOG_FORMAT`, `STALE_FEED_THRESHOLD_MINUTES` (defaults in compose; no `.env` required).
+- **Dockerfile:** `uvicorn app.main:app --host 0.0.0.0 --port 8000`
+- **Compose:** Bind-mounts `./data`, `./logs`; healthcheck on `/health`
+- **Environment:** `DATABASE_URL`, `LOG_LEVEL`, `LOG_FORMAT`, `STALE_FEED_THRESHOLD_MINUTES` — defaults inline (no mandatory `.env`)
 
 ---
 
-## 9. Testing strategy
+## 9. Testing
 
-- **Framework:** pytest (107 tests at Phase 5 audit).
-- **Coverage:** ~95% on `app/` (`pytest --cov=app`).
-- **Suites:** `test_sessions`, `test_ingestion`, `test_metrics`, `test_funnel`, `test_heatmap`, `test_anomalies`, `test_health`, `test_edge_cases`, `test_seed`.
-- **Edge cases:** Empty store, staff-only, zero purchases, REENTRY, batch limits, stale feed, idempotent seed.
-- **Fixtures:** Fresh SQLite per test via `conftest.py` (`test_api.db`).
+- **Framework:** pytest — **125 tests**, ~95% coverage on `app/`
+- **Suites:** sessions, ingestion, POS, metrics, funnel, heatmap, anomalies, health, edge cases, seed
+- **Gap:** No `test_pipeline.py`; `tests/assertions.py` is a stub
 
 ---
 
-## 10. AI-assisted decisions
+## 10. Design decisions and technology choices
 
-1. **In-memory sessions vs persisted session table**  
-   An LLM recommended deriving sessions from the event stream at query time rather than maintaining a `visitor_sessions` table. This reduced schema complexity, kept ingest idempotent and simple, and aligned with the hackathon time box. Trade-off: repeated full scans per request (acceptable for SQLite + daily windows).
+*Merged from the former `CHOICES.md` document.*
 
-2. **Visitor-level funnel vs session-level funnel**  
-   For REENTRY handling, the funnel counts distinct `visitor_id` values per stage (any session qualifies) so re-entry does not inflate unique visitors. AI helped articulate drop-off as `(prior_count - current) / prior_count × 100`.
+### 10.1 Detection model
 
-3. **Deterministic anomaly thresholds**  
-   Without seven days of historical data in the database, the implementation uses documented fixed thresholds in `app/anomalies.py` instead of a rolling baseline. AI suggested deferring 7-day averages until multi-day ingest exists, while still delivering queue spike, conversion drop, and dead-zone signals.
+| Option | Assessment |
+|--------|------------|
+| YOLOv8/v9/v10, RT-DETR, MediaPipe | Evaluated |
 
-4. **Docker without mandatory `.env`**  
-   Compose injects defaults inline so `docker compose up` works on a clean clone (acceptance gate #1). AI flagged that `env_file: .env` breaks fresh clones when `.env` is gitignored.
+**Choice:** **YOLO11m + ByteTrack** (`pipeline/detect.py`, `pipeline/tracker.py`).
+
+**Rationale:** Pre-trained COCO weights, CPU-viable inference, bounding boxes for zone polygons and line crossing. Part A rewards edge-case handling over SOTA mAP; API delivery was prioritized in the time box. Dependencies pinned in `requirements.txt` (`ultralytics`, `opencv-python-headless`, `lapx`).
+
+### 10.2 Event schema and session model
+
+| Option | Assessment |
+|--------|------------|
+| Flat events only, session-aggregated only, hybrid | Hybrid selected |
+
+**Choice:** Persist immutable events in SQLite; derive `VisitorSession` in memory via `build_sessions()`.
+
+**Rationale:** Idempotent ingest on `event_id`; full history for heatmap and queue counts; centralized REENTRY and orphan rules. Trade-off: sessions recomputed per request (acceptable for day-scoped SQLite queries).
+
+### 10.3 API storage and framework
+
+**Choice:** **SQLite** + SQLAlchemy 2.0 sync + **FastAPI** domain routers.
+
+**Rationale:** Single-file DB, no extra container, survives Docker restarts via bind mount. POS and events share one store for correlation. Global 503 handlers and structured logging for production readiness.
+
+### 10.4 POS conversion window
+
+**Choice:** `transaction.timestamp − 5min ≤ billing_activity_at ≤ transaction.timestamp`
+
+Matches challenge PDF: visitor in billing within five minutes before POS swipe.
+
+### 10.5 Anomaly detection
+
+**Choice:** Fixed daily thresholds in `app/anomalies.py` (queue joins ≥10/≥20, conversion <20%/<10%, heatmap score <20/<10).
+
+**Rationale:** Testable without seeding seven days of history. Rolling baselines deferred.
+
+### 10.6 Structured logging
+
+**Choice:** JSON middleware logs — `trace_id`, `endpoint`, `latency_ms`, `status_code`, optional `store_id`, `event_count` on ingest routes.
+
+### 10.7 Staff exclusion
+
+**Choice:** `is_staff` on events; `customer_sessions()` filters staff from customer metrics. Pipeline `staff.py` not yet implemented — flag defaults from pipeline emitters.
+
+### 10.8 Heatmap normalization
+
+**Choice:** `engagement_score = visit_count + total_dwell_ms/1000`; highest zone = 100.
+
+### 10.9 Seed and bridge workflows
+
+**Choice:** `seed_from_sample.py` for challenge-format files; `bridge_pipeline_to_product.py` for generated pipeline demo artifacts (uses same ingest functions as HTTP).
 
 ---
 
-## 11. Known gaps (design level)
+## 11. Tradeoffs
 
-- CV pipeline not connected to ingest.
-- Anomalies use fixed thresholds, not 7-day rolling averages or 30-minute dead-zone timers per PDF wording (requires multi-day / sub-hour event streams).
-- `CHOICES.md` documents model and storage decisions; detection choice is provisional until pipeline is built.
+| Decision | Benefit | Cost |
+|----------|---------|------|
+| In-memory sessions | Simple schema, idempotent ingest | Full event scan per analytics request |
+| SQLite | Zero-ops deployment | Limited concurrent write throughput |
+| Fixed anomaly thresholds | Works day one | Not PDF-perfect rolling baselines |
+| Per-camera track IDs | Simple pipeline | No cross-camera visitor fusion |
+| Frame skipping (every 10th) | Faster multi-camera runs | May miss brief zone crossings |
+| Offline purchase matching | Rich validation reports | Not exposed via API |
+| Streamlit over custom React | Fast bonus delivery | Revenue KPI limited (no API field) |
+
+---
+
+## 12. Assumptions
+
+1. **UTC calendar days** scope all store analytics queries.
+2. **One store_id** per request; multi-store supported via separate calls.
+3. **CCTV clip start times** in `pipeline/config.py` anchor event timestamps.
+4. **Brigade Bangalore dataset** layout matches normalized polygons in config.
+5. **POS correlation** requires `billing_activity_at` from billing-zone or queue events inside an open session.
+6. **Sessions open only on ENTRY/REENTRY** — zone-only events cannot create sessions.
+7. **Evaluator can provide** CCTV/POS under `./data/` or use ingest/seed paths.
+8. **Python 3.11** — dependencies not validated on 3.12+.
+
+---
+
+## 13. Known limitations
+
+1. **CAM3/CAM5 demo outputs empty** on last run — 0 ENTRY events → 0 sessions despite 66 zone events ingested.
+2. **No cross-camera ReID** — CAM1 `VIS_*` ≠ CAM3 `VIS_*`.
+3. **Staff classification stub** — `pipeline/staff.py` not implemented.
+4. **Anomalies:** no 7-day rolling conversion baseline or 30-minute dead-zone timer per PDF wording.
+5. **No daily revenue GET endpoint** — dashboard shows em dash for Revenue KPI.
+6. **Purchase matches** — offline JSON only; not in SQLite or API.
+7. **Pipeline not auto-wired** to HTTP ingest — manual bridge step after demo run.
+8. **`run_pipeline.sh`** — bash skeleton only.
+9. **CCTV vs POS time mismatch** in demo clips — purchase matching returns 0 matches.
+10. **Heatmap unreliable** below 20 customer sessions (`data_confidence: false`).
+
+Historical analysis: [docs/archive/final_session_gap_report.md](docs/archive/final_session_gap_report.md), [docs/archive/project_completion_report.md](docs/archive/project_completion_report.md).
+
+---
+
+## 14. AI-assisted decisions
+
+1. **In-memory sessions vs persisted table** — reduced schema complexity for hackathon scope.
+2. **Visitor-level funnel** — REENTRY does not double-count unique visitors; drop-off = `(prior − current) / prior × 100`.
+3. **Deterministic anomaly thresholds** — deliver signals without multi-day seed data.
+4. **Docker without mandatory `.env`** — clean-clone `docker compose up` acceptance gate.
+
+---
+
+## 15. Decision summary
+
+| Area | Decision | Status |
+|------|----------|--------|
+| Detection | YOLO11m + ByteTrack | Implemented |
+| Events + sessions | Hybrid persist + derive | Implemented |
+| Database | SQLite + SQLAlchemy | Implemented |
+| API | FastAPI domain routers | Implemented |
+| Anomalies | Fixed thresholds | Implemented |
+| Logging | JSON middleware | Implemented |
+| Dashboard | Streamlit → API | Implemented |
+| Staff CV | Uniform/heuristic | Stub |
+| Purchase matching API | — | Not implemented |

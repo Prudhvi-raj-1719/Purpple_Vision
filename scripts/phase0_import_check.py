@@ -5,8 +5,12 @@ import sys
 CHECKS = [
     ("fastapi", "fastapi"),
     ("sqlalchemy", "sqlalchemy"),
+    ("pydantic", "pydantic"),
+    ("httpx", "httpx"),
     ("opencv", "cv2"),
     ("ultralytics", "ultralytics"),
+    ("supervision", "supervision"),
+    ("numpy", "numpy"),
     ("pandas", "pandas"),
     ("streamlit", "streamlit"),
     ("pytest", "pytest"),

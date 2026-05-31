@@ -1,278 +1,447 @@
-# Store Intelligence
+# Purpple Vision
 
-> **Status:** Intelligence API complete (ingest, metrics, funnel, heatmap, anomalies, health). Detection pipeline and dashboard are not yet implemented.
+Store intelligence for retail: turn CCTV footage and POS data into visitor sessions, conversion analytics, and a live dashboard.
+
+**North Star metric:** Conversion rate = visitors who purchased ÷ unique visitors.
+
+---
 
 ## Overview
 
-End-to-end Store Intelligence system for the Apex Retail 48-hour engineering challenge.
-Converts CCTV footage into structured behavioral events and exposes real-time analytics via REST API.
+### Problem statement
+
+Retail stores capture CCTV and POS transactions separately. Without linking them, managers cannot answer:
+
+- How many visitors entered and reached billing?
+- Which shelf zones get the most engagement?
+- Where do shoppers drop off before purchase?
+- Are queue spikes or dead zones hurting conversion?
+
+### Solution summary
+
+Purpple Vision processes multi-camera CCTV with YOLO + ByteTrack, emits schema-validated behavioural events, loads Brigade POS invoices, persists everything in SQLite, and exposes analytics through a FastAPI layer and Streamlit dashboard.
+
+### Key capabilities
+
+- Multi-camera behavioural event generation (zones, entry/exit, queue, payment)
+- Idempotent event and POS ingest with session-based analytics
+- Store metrics, funnel, heatmap, and anomaly detection APIs
+- Offline purchase matching (CCTV ↔ POS validation)
+- Docker deployment with optional dashboard profile
+- 125 automated tests (~95% coverage on `app/`)
+
+---
+
+## Features
+
+| Area | Description |
+|------|-------------|
+| **CCTV analytics** | YOLO11m person detection + ByteTrack across CAM1–CAM5 clips |
+| **Zone engagement tracking** | CAM1/CAM2 shelf polygons → ZONE_ENTER, ZONE_EXIT, ZONE_DWELL |
+| **Entry/Exit detection** | CAM3 line-crossing → ENTRY, EXIT, REENTRY |
+| **Queue/Payment analytics** | CAM5 billing zones → queue join/exit, payment enter/exit |
+| **POS ingestion** | Brigade CSV → invoice aggregation → SQLite via bridge or API |
+| **Purchase matching** | Offline invoice-centric CCTV correlation (`purchase_matches.json`) |
+| **FastAPI analytics** | Metrics, funnel, heatmap, anomalies, health |
+| **Streamlit dashboard** | KPIs, funnel, heatmap, anomalies (reads API only) |
+
+---
+
+## Architecture
+
+```
+CCTV clips (data/cctv/Brigade_Bangalore/*.mp4)
+    │
+    ▼
+pipeline/  (YOLO, zones, dwell, entry_exit, queue)
+    │
+    ▼
+JSONL events  (data/generated/pipeline_demo/*.jsonl)
+    │
+    ├── scripts/bridge_pipeline_to_product.py
+    │       or POST /events/ingest
+    ▼
+SQLite  (data/store_intelligence.db)
+    │
+    ▼
+build_sessions()  →  metrics / funnel / heatmap / anomalies
+    │
+    ├── FastAPI  (port 8000)
+    └── Streamlit dashboard  (port 8501)
+
+
+Brigade POS CSV  (data/pos/*.csv)
+    │
+    ▼
+pipeline/pos_loader  →  aggregated invoices + purpple_pos_transactions.csv
+    │
+    ├── bridge script  or  POST /pos/ingest
+    ▼
+SQLite  →  Analytics API  (conversion correlation)
+```
+
+Default store: `STORE_BLR_002` · Default demo metric date: `2026-04-10` (UTC)
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|------------|
+| Language | Python 3.11 |
+| API | FastAPI, Uvicorn, Pydantic v2 |
+| Database | SQLite, SQLAlchemy 2.0 |
+| CV | Ultralytics YOLO11m, Supervision, ByteTrack, OpenCV (headless) |
+| Data | Pandas, NumPy |
+| Dashboard | Streamlit, httpx |
+| Container | Docker, Docker Compose |
+
+---
+
+## Repository Structure
+
+```
+Purpple_Vision/
+├── app/                    # FastAPI intelligence API
+├── pipeline/               # CCTV processors, POS loader, event adapter
+├── dashboard/
+│   └── streamlit_app.py    # Streamlit UI
+├── scripts/
+│   ├── run_pipeline_demo.py
+│   ├── bridge_pipeline_to_product.py
+│   ├── seed_from_sample.py
+│   └── phase0_import_check.py
+├── tests/                  # pytest suite (125 tests)
+├── examples/               # Sample API JSON payloads
+├── docs/archive/           # Historical audit reports
+├── data/                   # CCTV, POS, generated outputs (gitignored)
+├── requirements.txt
+├── requirements-dev.txt
+├── docker-compose.yml
+├── Dockerfile
+├── DESIGN.md
+└── PROJECT_STATE.md
+```
+
+---
 
 ## Prerequisites
 
-- **Python 3.11.x** (required — see troubleshooting if you have 3.12 or 3.13)
-- **Git**
+| Requirement | Detail |
+|-------------|--------|
+| **Python** | **3.11.x** (3.12+ not supported — NumPy/pins target 3.11) |
+| **OS** | Windows 10/11, Linux, or macOS |
+| **Git** | Clone and version control |
+| **Docker** | Optional — containerized API + dashboard |
+| **GPU** | Optional — pipeline defaults to CPU (`PIPELINE_DEVICE=cpu` in `.env.example`) |
+| **Dataset** | Brigade CCTV MP4s under `data/cctv/Brigade_Bangalore/` and POS CSV under `data/pos/` (not in repo) |
 
-Optional:
+First YOLO run downloads weights automatically if `models/yolo11m.pt` is absent.
 
-- Docker & Docker Compose (for containerized deployment)
+---
 
-## Quick Setup on a New Machine
-
-### 1. Clone repository
+## Installation
 
 ```powershell
 git clone https://github.com/Prudhvi-raj-1719/Purpple_Vision.git
 cd Purpple_Vision
-```
 
-### 2. Create virtual environment (Python 3.11)
-
-Use Python 3.11 explicitly — do not use the system default if it is 3.12 or 3.13.
-
-```powershell
-# Windows (recommended)
 py -3.11 -m venv .venv
-
-# macOS / Linux (if python3.11 is installed)
-python3.11 -m venv .venv
-```
-
-### 3. Activate virtual environment
-
-```powershell
-# Windows PowerShell
 .\.venv\Scripts\Activate.ps1
 
-# Windows CMD
-.\.venv\Scripts\activate.bat
-
-# macOS / Linux
-source .venv/bin/activate
-```
-
-### 4. Upgrade pip
-
-```powershell
 python -m pip install --upgrade pip
-```
-
-### 5. Install requirements
-
-```powershell
 pip install -r requirements.txt
 ```
 
-> First install may take 5–15 minutes because `ultralytics` pulls in `torch` (~700 MB+).
-
-### 6. Create `.env` from `.env.example`
+Optional (linting + dev tools):
 
 ```powershell
-# Windows
-copy .env.example .env
-
-# macOS / Linux
-cp .env.example .env
+pip install -r requirements-dev.txt
 ```
 
-### 7. Verify installation
+Optional local config:
 
 ```powershell
-python --version
-pip check
+copy .env.example .env
+```
+
+---
+
+## Verification
+
+```powershell
 python scripts/phase0_import_check.py
+pytest
 ```
 
-Expected: `Python 3.11.x`, `No broken requirements found`, and `Overall: ALL PASS`.
+**Expected result:**
 
-Quick one-liner check:
+- Import checks: **ALL PASS** (fastapi, sqlalchemy, opencv, ultralytics, supervision, etc.)
+- Tests: **125 passed**
+
+With coverage:
 
 ```powershell
-python -c "import fastapi, sqlalchemy, cv2, ultralytics, pandas, streamlit, pytest; print('All core packages OK')"
+pytest --cov=app --cov-report=term-missing
 ```
 
-## Troubleshooting
+---
 
-### Python 3.13 is not supported
-
-**Symptom:** `pip install -r requirements.txt` fails while building `numpy` from source, with errors about missing C compilers (`cl`, `gcc`, Meson build failure).
-
-**Cause:** Dependencies are pinned for **Python 3.11.x**. NumPy 1.26.4 has pre-built wheels for 3.11 but not for 3.13, so pip tries to compile from source.
-
-**Fix:**
+## Running the API
 
 ```powershell
-# Check your version
-python --version
-
-# Recreate the venv with Python 3.11
-deactivate
-Remove-Item -Recurse -Force .venv   # Windows
-py -3.11 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-```
-
-### Torch installation is slow
-
-**Symptom:** `pip install` appears stuck on `torch` or `torchvision` for several minutes.
-
-**Cause:** Normal behavior. `ultralytics` depends on PyTorch, which is a large download (~700 MB+ on CPU builds).
-
-**Fix:** Wait for the install to finish. Do not interrupt unless it fails with an error. Verify after install:
-
-```powershell
-python -c "import torch; print(torch.__version__)"
-```
-
-### OpenCV installation issues
-
-**Symptom:** `import cv2` fails, or pip reports conflicts between `opencv-python` and `opencv-python-headless`.
-
-**Cause:** This project pins `opencv-python-headless`. `ultralytics` may also install `opencv-python` as a transitive dependency.
-
-**Fix:**
-
-```powershell
-pip install --force-reinstall opencv-python-headless==4.10.0.84
-python -c "import cv2; print(cv2.__version__)"
-```
-
-If import still fails on Linux, install system libraries:
-
-```bash
-sudo apt-get install -y libgl1 libglib2.0-0
-```
-
-On Windows, reinstalling the headless wheel is usually sufficient.
-
-## Project Structure
-
-```
-├── app/              # FastAPI intelligence API
-├── pipeline/         # CV detection & event emission pipeline
-├── dashboard/        # Streamlit live dashboard (bonus)
-├── tests/            # pytest test suite
-├── scripts/          # Utility scripts
-├── data/             # Dataset (gitignored — place challenge ZIP contents here)
-├── docker-compose.yml
-├── Dockerfile
-├── requirements.txt
-├── DESIGN.md
-└── CHOICES.md
-```
-
-## Run the API locally
-
-```powershell
-.\.venv\Scripts\Activate.ps1
-copy .env.example .env
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-API docs: [http://localhost:8000/docs](http://localhost:8000/docs)
+Open:
 
-### Seed sample data (optional)
+- Swagger UI: http://localhost:8000/docs
+- Health: http://localhost:8000/health
 
-Place challenge files under `./data/` then:
+Example query (after data is loaded):
+
+```powershell
+curl "http://localhost:8000/stores/STORE_BLR_002/metrics?date=2026-04-10"
+curl "http://localhost:8000/stores/STORE_BLR_002/funnel?date=2026-04-10"
+curl "http://localhost:8000/stores/STORE_BLR_002/heatmap?date=2026-04-10"
+curl "http://localhost:8000/stores/STORE_BLR_002/anomalies?date=2026-04-10"
+```
+
+---
+
+## Running the Dashboard
+
+**Terminal 1 — API:**
+
+```powershell
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+**Terminal 2 — Streamlit:**
+
+```powershell
+$env:API_BASE_URL = "http://localhost:8000"
+$env:DEFAULT_STORE_ID = "STORE_BLR_002"
+$env:DEFAULT_METRIC_DATE = "2026-04-10"
+streamlit run dashboard/streamlit_app.py --server.port 8501
+```
+
+Open: http://localhost:8501
+
+When sessions = 0, the dashboard shows an informative empty state instead of blank charts.
+
+---
+
+## Running the CCTV Pipeline
+
+Place Brigade clips here (default paths from `pipeline/config.py`):
+
+```
+data/cctv/Brigade_Bangalore/CAM 1.mp4
+data/cctv/Brigade_Bangalore/CAM 2.mp4
+data/cctv/Brigade_Bangalore/CAM 3.mp4
+data/cctv/Brigade_Bangalore/CAM 5.mp4
+```
+
+Override footage directory:
+
+```powershell
+$env:CCTV_FOOTAGE_DIR = "E:\path\to\cctv\folder"
+```
+
+### Individual cameras
+
+**CAM1 — shelf zone engagement:**
+
+```powershell
+python -m pipeline.cam1_processor
+```
+
+**CAM2 — shelf zone engagement:**
+
+```powershell
+python -m pipeline.cam2_processor
+```
+
+**CAM3 — entry / exit:**
+
+```powershell
+python -m pipeline.entry_exit
+```
+
+**CAM5 — queue / payment:**
+
+```powershell
+python -m pipeline.queue
+```
+
+Outputs: `data/generated/pipeline_demo/cam*_events.jsonl` (+ `.notbk.jsonl` mirrors)
+
+---
+
+## Running the Full Demo Pipeline
+
+Runs CAM1, CAM2, CAM3, and CAM5 in one command and writes a report to `logs/pipeline_demo_report.txt`:
+
+```powershell
+python scripts/run_pipeline_demo.py
+```
+
+---
+
+## Loading Brigade POS Data
+
+Place CSV at `data/pos/Brigade_Bangalore_10_April_26.csv` or set:
+
+```powershell
+$env:BRIGADE_POS_CSV_PATH = "E:\path\to\Brigade_Bangalore_10_April_26.csv"
+python -m pipeline.pos_loader
+```
+
+Outputs:
+
+- `data/generated/pos/aggregated_transactions.json`
+- `data/generated/pos/purpple_pos_transactions.csv`
+
+---
+
+## Purchase Matching
+
+Offline validation — matches POS invoices to CCTV events by time window:
+
+```powershell
+python -m pipeline.purchase_matching
+```
+
+Output: `data/generated/purchase_matches.json`
+
+Requires pipeline demo JSONL and aggregated POS JSON from steps above.
+
+---
+
+## Bridging Pipeline Data Into Product
+
+Loads generated JSONL + POS CSV into SQLite using the same logic as HTTP ingest, then validates analytics:
+
+```powershell
+python scripts/bridge_pipeline_to_product.py
+```
+
+Report: `docs/archive/bridge_validation_report.md`
+
+**Alternative — challenge sample files:**
 
 ```powershell
 python scripts/seed_from_sample.py
 ```
 
-Loads `data/sample_events.jsonl` and `data/pos_transactions.csv` when present (idempotent).
+Expects `data/sample_events.jsonl` and `data/pos_transactions.csv` when present.
 
-### Run tests
+---
+
+## End-to-end demo (≈10 minutes)
 
 ```powershell
-pytest
-pytest --cov=app --cov-report=term-missing
+# 1. Install + verify (once)
+pip install -r requirements.txt
+python scripts/phase0_import_check.py
+
+# 2. Process CCTV + POS (requires dataset files)
+python scripts/run_pipeline_demo.py
+python -m pipeline.pos_loader
+
+# 3. Load into SQLite
+python scripts/bridge_pipeline_to_product.py
+
+# 4. Run API + dashboard (two terminals)
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+# second terminal:
+$env:API_BASE_URL = "http://localhost:8000"
+$env:DEFAULT_METRIC_DATE = "2026-04-10"
+streamlit run dashboard/streamlit_app.py --server.port 8501
 ```
 
-125 tests; `app/` coverage ~95%.
-
-## API endpoints
-
-| Method | Path | Module |
-|--------|------|--------|
-| `GET` | `/health` | `app/health.py` |
-| `POST` | `/events/ingest` | `app/ingestion.py` |
-| `POST` | `/pos/ingest` | `app/pos_ingestion.py` |
-| `GET` | `/stores/{store_id}/metrics?date=YYYY-MM-DD` | `app/metrics.py` |
-| `GET` | `/stores/{store_id}/funnel?date=YYYY-MM-DD` | `app/funnel.py` |
-| `GET` | `/stores/{store_id}/heatmap?date=YYYY-MM-DD` | `app/heatmap.py` |
-| `GET` | `/stores/{store_id}/anomalies?date=YYYY-MM-DD` | `app/anomalies.py` |
-
-Example payloads: `examples/*.json`
-
-Funnel stages: `unique_visitors` → `reached_any_zone` → `billing_queue` → `converted_visitors`. POS conversion uses billing within 5 minutes **before** each transaction timestamp.
-
-## Detection pipeline (not yet implemented)
-
-The `pipeline/` package contains module stubs (`detect.py`, `tracker.py`, `emit.py`, etc.). Until video processing is built:
-
-1. Ingest events via `POST /events/ingest` and POS rows via `POST /pos/ingest`, or  
-2. Run `python scripts/seed_from_sample.py` with dataset files in `./data/`.
-
-Planned flow: process CCTV clips → JSONL → ingest → analytics (see [DESIGN.md](./DESIGN.md)).
+---
 
 ## Docker
 
-SQLite is file-based — no database container is required. From a clean clone:
+**API only** (no `.env` required):
 
 ```powershell
-git clone https://github.com/Prudhvi-raj-1719/Purpple_Vision.git
-cd Purpple_Vision
 docker compose up --build
 ```
 
-No `.env` file is required. Optional: copy `.env.example` to `.env` to override `API_PORT`, `LOG_LEVEL`, etc.
+API: http://localhost:8000/health
 
-The API listens on [http://localhost:8000](http://localhost:8000). Data persists under `./data` and logs under `./logs`.
-
-### Verify the API
-
-```powershell
-# Health (service status, database, per-store feeds)
-curl http://localhost:8000/health
-
-# Store metrics (empty store returns valid JSON with zeros)
-curl "http://localhost:8000/stores/STORE_BLR_002/metrics?date=2026-03-03"
-curl "http://localhost:8000/stores/STORE_BLR_002/funnel?date=2026-03-03"
-curl "http://localhost:8000/stores/STORE_BLR_002/heatmap?date=2026-03-03"
-curl "http://localhost:8000/stores/STORE_BLR_002/anomalies?date=2026-03-03"
-```
-
-Expected: HTTP 200 and JSON from each endpoint.
-
-### Stop and restart (SQLite persistence)
-
-```powershell
-docker compose down
-docker compose up -d
-```
-
-The SQLite file `./data/store_intelligence.db` survives restarts via the bind mount.
-
-### Optional dashboard profile
+**API + Streamlit dashboard:**
 
 ```powershell
 docker compose --profile dashboard up --build
 ```
 
+- API: http://localhost:8000
+- Dashboard: http://localhost:8501
+
+Stop:
+
+```powershell
+docker compose down
+```
+
+SQLite persists in `./data/store_intelligence.db` via bind mount.
+
+---
+
+## Current Project Status
+
+| Area | Completion |
+|------|------------|
+| Intelligence API | ~96% |
+| CV pipeline (code) | ~75% |
+| CV pipeline (demo output) | ~40% |
+| Dashboard | ~82% |
+| End-to-end demo | ~35% |
+| **Overall** | **~76%** |
+
+Latest bridged snapshot: **66 events**, **24 POS rows**, **0 sessions** (zone-only events; no CAM3 ENTRY in last run).
+
+Full breakdown: [PROJECT_STATE.md](PROJECT_STATE.md)
+
+---
+
+## Known Limitations
+
+- **CAM3 ENTRY events:** Current Brigade demo clips produced **0 ENTRY** events on the last run → **0 sessions** in analytics until entry detection succeeds.
+- **Session rules:** Sessions open on ENTRY/REENTRY only; zone events alone do not create sessions.
+- **Cross-camera IDs:** Track IDs are per camera — CAM1 `VIS_*` ≠ CAM3 `VIS_*` (no ReID fusion).
+- **Purchase matching:** Depends on CCTV/POS timestamp overlap; evening CCTV vs daytime POS yields 0 matches.
+- **Revenue KPI:** Dashboard shows **—** — daily revenue totals are not exposed by the analytics API.
+- **Staff detection:** `pipeline/staff.py` is a stub.
+
+Details: [DESIGN.md](DESIGN.md) §13 · [docs/archive/final_session_gap_report.md](docs/archive/final_session_gap_report.md)
+
+---
+
 ## Documentation
 
-- [DESIGN.md](./DESIGN.md) — Architecture overview
-- [CHOICES.md](./CHOICES.md) — Technical decision log
+| Document | Purpose |
+|----------|---------|
+| [README.md](README.md) | Setup and run guide (this file) |
+| [DESIGN.md](DESIGN.md) | Architecture, decisions, tradeoffs |
+| [PROJECT_STATE.md](PROJECT_STATE.md) | Completion status, gaps, API reference |
+| [docs/archive/](docs/archive/) | Historical phase and audit reports |
+| [examples/](examples/) | Sample API request/response JSON |
 
-## Status
+---
 
-| Phase | Description | Status |
-|-------|-------------|--------|
-| 0 | Scaffold & environment | Complete |
-| 1–2 | Event schema, ingest, health | Complete |
-| 3 | Session engine, metrics, POS correlation | Complete |
-| 4 | Funnel, heatmap, anomalies, production health/logging | Complete |
-| 5 | PDF API completeness (POS ingest, funnel billing_queue, etc.) | Complete |
-| 6 | Detection pipeline (YOLO) | Not started |
-| 7 | Live dashboard | Not started |
+## API Endpoints
+
+| Method | Path |
+|--------|------|
+| `GET` | `/health` |
+| `POST` | `/events/ingest` |
+| `POST` | `/pos/ingest` |
+| `GET` | `/stores/{store_id}/metrics?date=YYYY-MM-DD` |
+| `GET` | `/stores/{store_id}/funnel?date=YYYY-MM-DD` |
+| `GET` | `/stores/{store_id}/heatmap?date=YYYY-MM-DD` |
+| `GET` | `/stores/{store_id}/anomalies?date=YYYY-MM-DD` |

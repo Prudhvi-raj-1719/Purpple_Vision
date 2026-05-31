@@ -1,45 +1,41 @@
 # =============================================================================
 # Store Intelligence — Runtime Dependencies (Python 3.11)
-# Pinned for 48-hour hackathon stability. Re-pin after intentional upgrades.
+# Pinned for hackathon stability. Re-pin after intentional upgrades.
+#
+# Install:  pip install -r requirements.txt
+# Dev extras: pip install -r requirements-dev.txt
 # =============================================================================
 
 # --- Web API ---
-fastapi==0.115.6
-uvicorn[standard]==0.34.0
-pydantic==2.10.4
-pydantic-settings==2.7.1
-python-multipart==0.0.20
+fastapi==0.115.6          # REST API framework (app/, tests TestClient)
+uvicorn[standard]==0.34.0 # ASGI server (Docker CMD, local uvicorn)
+pydantic==2.10.4          # Event/POS schemas and API contracts (app/models.py)
 
-# --- Database (SQLite via stdlib sqlite3 — no async driver needed) ---
-sqlalchemy==2.0.36
+# --- Database ---
+sqlalchemy==2.0.36        # SQLite ORM (app/db.py)
 
-# --- HTTP Client (pipeline ingest + API tests) ---
-httpx==0.28.1
+# --- HTTP client ---
+httpx==0.28.1             # Streamlit dashboard → FastAPI; bridge scripts
 
-# --- Environment & Config ---
-python-dotenv==1.0.1
+# --- Environment ---
+python-dotenv==1.0.1      # .env loading (seed, bridge, config scripts)
 
-# --- Structured Logging ---
-structlog==24.4.0
+# --- Computer vision & detection ---
+opencv-python-headless==4.10.0.84  # cv2 in pipeline (zones, dwell, entry_exit, queue)
+ultralytics==8.3.63                # YOLO11m inference (pipeline/detect.py, queue.py)
+supervision==0.28.0                # ByteTrack + Detections (pipeline trackers/zones)
+numpy==1.26.4                      # Array ops in pipeline geometry/overlap
+pillow==11.1.0                     # Image stack (ultralytics transitive; explicit pin for 3.11)
+lapx==0.5.11                       # ByteTrack assignment (Windows-compatible lap)
 
-# --- Computer Vision & Detection ---
-# ultralytics pulls torch, torchvision, numpy, pillow, pyyaml, etc.
-# Do NOT pin torch separately — let ultralytics resolve a compatible CPU wheel.
-opencv-python-headless==4.10.0.84
-ultralytics==8.3.63
-numpy==1.26.4
-pillow==11.1.0
+# Transitive via ultralytics (not pinned): torch, torchvision, scipy, matplotlib, pyyaml, etc.
 
-# --- ByteTrack (Ultralytics tracker — lapx replaces lap on Windows) ---
-lapx==0.5.11
-
-# --- Data Processing (POS CSV + analytics helpers) ---
-pandas==2.2.3
+# --- Data processing ---
+pandas==2.2.3             # POS CSV aggregation (pos_loader); Streamlit charts
 
 # --- Dashboard ---
-streamlit==1.41.1
+streamlit==1.41.1         # dashboard/streamlit_app.py
 
-# --- Testing ---
+# --- Testing (evaluator / CI; included in main for one-command setup) ---
 pytest==8.3.4
-pytest-asyncio==0.25.0
 pytest-cov==6.0.0

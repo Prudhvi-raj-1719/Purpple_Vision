@@ -59,9 +59,13 @@ logs/
 *.db
 *.sqlite
 *.sqlite3
+*.db-shm
+*.db-wal
 
 # Dataset files (challenge data — do not commit)
 data/clips/
+data/cctv/
+data/generated/
 data/*.json
 data/*.jsonl
 data/*.csv

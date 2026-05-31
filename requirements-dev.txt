@@ -1,3 +1,4 @@
-# Optional dev-only tools — not required for docker compose up or submission.
+# Optional dev-only tools — install after requirements.txt for linting and archived utilities.
 -r requirements.txt
 ruff==0.8.6
+matplotlib==3.10.9
