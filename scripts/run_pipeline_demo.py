@@ -2,7 +2,7 @@
 End-to-end demo: run CAM1, CAM2, CAM3, and CAM5 migrated pipelines.
 
 Orchestrates existing processors only (no business-logic changes).
-Writes a summary report to logs/pipeline_demo_report.txt.
+Writes a summary report to data/outputs/pipeline/pipeline_demo_report.txt.
 """
 
 from __future__ import annotations
@@ -29,8 +29,8 @@ from pipeline.queue import CAMERA_KEY as CAM5_KEY, process_cam5_video
 
 logger = logging.getLogger(__name__)
 
-DEMO_OUTPUT_DIR = OUTPUT_DIR / "pipeline_demo"
-REPORT_PATH = REPO_ROOT / "logs" / "pipeline_demo_report.txt"
+DEMO_OUTPUT_DIR = OUTPUT_DIR / "pipeline" / "pipeline_demo"
+REPORT_PATH = OUTPUT_DIR / "pipeline" / "pipeline_demo_report.txt"
 
 CAM1_CAM2_TYPES = ("ZONE_ENTER", "ZONE_EXIT", "DWELL_COMPLETED")
 CAM3_TYPES = ("ENTRY", "EXIT")

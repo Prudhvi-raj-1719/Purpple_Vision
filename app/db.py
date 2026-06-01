@@ -34,7 +34,7 @@ load_dotenv()
 # Configuration
 # ---------------------------------------------------------------------------
 
-DEFAULT_DATABASE_URL = "sqlite:///./data/store_intelligence.db"
+DEFAULT_DATABASE_URL = "sqlite:///./data/databases/store_intelligence.db"
 
 
 def get_database_url() -> str:

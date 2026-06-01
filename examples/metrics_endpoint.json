@@ -22,7 +22,8 @@
     "current_queue_depth": 2,
     "queue_abandonment_rate": 0.0,
     "billing_reach_rate": 0.5,
-    "total_sessions": 2
+    "total_sessions": 2,
+    "total_revenue_inr": 1240.0
   },
   "setup_notes": {
     "events": "POST /events/ingest with ENTRY, ZONE_DWELL, BILLING_QUEUE_JOIN, EXIT for the same UTC day",

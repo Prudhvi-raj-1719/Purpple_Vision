@@ -344,6 +344,12 @@ class StoreMetricsResponse(BaseModel):
     queue_abandonment_rate: float = Field(ge=0.0, le=1.0)
     billing_reach_rate: float = Field(ge=0.0, le=1.0)
     total_sessions: int = Field(ge=0)
+    total_revenue_inr: float = Field(
+        ge=0.0,
+        description=(
+            "Sum of basket_value_inr for all POS transactions on the requested UTC day."
+        ),
+    )
 
 
 class FunnelStage(BaseModel):

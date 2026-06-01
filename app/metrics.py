@@ -151,6 +151,10 @@ def compute_store_metrics(
     sessions = build_sessions(events)
     customers = customer_sessions(sessions)
 
+    total_revenue_inr = sum(
+        transaction.basket_value_inr for transaction in transactions
+    )
+
     return StoreMetricsResponse(
         store_id=store_id,
         date=metric_date.isoformat(),
@@ -162,6 +166,7 @@ def compute_store_metrics(
         queue_abandonment_rate=compute_queue_abandonment_rate(sessions),
         billing_reach_rate=compute_billing_reach_rate(sessions),
         total_sessions=len(customers),
+        total_revenue_inr=total_revenue_inr,
     )
 
 
@@ -184,7 +189,7 @@ def parse_metric_date(date_param: str | None) -> date:
     summary="Store analytics metrics",
     description=(
         "Returns unique visitors, conversion rate, dwell, queue abandonment, "
-        "billing reach, and session count for a store on a UTC calendar day."
+        "billing reach, session count, and daily POS revenue for a store on a UTC calendar day."
     ),
     responses={
         503: {"description": "Database unavailable"},

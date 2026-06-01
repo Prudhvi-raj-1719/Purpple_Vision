@@ -50,10 +50,8 @@ htmlcov/
 coverage.xml
 *.cover
 
-# Logs
-logs/
+# Logs (runtime *.log files)
 *.log
-!logs/.gitkeep
 
 # Database
 *.db

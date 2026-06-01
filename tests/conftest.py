@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 
 # Must be set before app.db is imported by test modules.
-os.environ["DATABASE_URL"] = "sqlite:///./data/test_api.db"
+os.environ["DATABASE_URL"] = "sqlite:///./data/databases/test_api.db"
 
 import pytest
 from fastapi.testclient import TestClient

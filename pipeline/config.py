@@ -10,7 +10,7 @@ from typing import Dict, List, Tuple
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = REPO_ROOT / "data"
 CCTV_DIR = Path(os.getenv("CCTV_FOOTAGE_DIR", DATA_DIR / "cctv" / "Brigade_Bangalore"))
-OUTPUT_DIR = Path(os.getenv("PIPELINE_OUTPUT_DIR", DATA_DIR / "generated"))
+OUTPUT_DIR = Path(os.getenv("PIPELINE_OUTPUT_DIR", DATA_DIR / "outputs"))
 MODEL_PATH = Path(os.getenv("YOLO_MODEL_PATH", REPO_ROOT / "models" / "yolo11m.pt"))
 
 DEFAULT_STORE_ID = os.getenv("STORE_ID", "STORE_BLR_002")
@@ -30,8 +30,8 @@ AGGREGATED_TRANSACTIONS_CSV = AGGREGATED_POS_DIR / "aggregated_transactions.csv"
 PURPPLE_POS_CSV = AGGREGATED_POS_DIR / "purpple_pos_transactions.csv"
 
 # Pipeline demo outputs + purchase matching (offline analytics).
-PIPELINE_DEMO_DIR = OUTPUT_DIR / "pipeline_demo"
-PURCHASE_MATCHES_JSON = OUTPUT_DIR / "purchase_matches.json"
+PIPELINE_DEMO_DIR = OUTPUT_DIR / "pipeline" / "pipeline_demo"
+PURCHASE_MATCHES_JSON = OUTPUT_DIR / "purchase_matching" / "purchase_matches.json"
 
 # Clip UTC anchors (from NOTEBK camera_timing_config; CAM3 estimated until overlay verified).
 CAMERA_CLIP_START: Dict[str, str] = {

@@ -241,6 +241,7 @@ class TestMetricsComputation:
         assert result.total_sessions == 2
         assert result.conversion_rate == 0.5
         assert result.billing_reach_rate == 0.5
+        assert result.total_revenue_inr == 500.0
         assert result.average_dwell_time_ms == 15_000.0
         assert result.queue_abandonment_rate == 0.0
 
@@ -250,6 +251,7 @@ class TestMetricsComputation:
         assert result.unique_visitors == 0
         assert result.conversion_rate == 0.0
         assert result.total_sessions == 0
+        assert result.total_revenue_inr == 0.0
         assert result.billing_reach_rate == 0.0
         assert result.queue_abandonment_rate == 0.0
         assert result.average_dwell_time_ms == 0.0
@@ -304,6 +306,15 @@ class TestMetricsComputation:
         result = compute_store_metrics(STORE, METRIC_DATE, events, txns)
         assert result.unique_visitors == 1
         assert result.total_sessions == 2
+
+    def test_total_revenue_inr_sums_all_pos_transactions(self) -> None:
+        txns = [
+            _pos("TXN_101", amount=849.50),
+            _pos("TXN_103", amount=1299.00),
+        ]
+        result = compute_store_metrics(STORE, METRIC_DATE, [], txns)
+
+        assert result.total_revenue_inr == 2148.50
 
 
 class TestPdfMetricsFields:
@@ -438,6 +449,7 @@ class TestMetricsEndpoint:
         assert body["unique_visitors"] == 1
         assert body["conversion_rate"] == 1.0
         assert body["total_sessions"] == 1
+        assert body["total_revenue_inr"] == 500.0
         assert "average_dwell_time_ms" in body
         assert "average_dwell_by_zone" in body
         assert "current_queue_depth" in body
