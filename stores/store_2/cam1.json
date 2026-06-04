@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "camera_key": "CAM1",
+  "enabled": true,
+  "competition_camera_id": "CAM_SHELF_01",
+  "coordinate_system": "normalized",
+  "zones": {
+    "GoodVibes": [
+      [0.7832, 0.0194],
+      [0.6825, 0.6882],
+      [0.786, 0.8263],
+      [0.9638, 0.0697]
+    ],
+    "Pilgrim": [
+      [0.0069, 0.0564],
+      [0.0778, 0.8683],
+      [0.2125, 0.7586],
+      [0.091, 0.0078]
+    ],
+    "Mamaearth": [
+      [0.5293, 0.0065],
+      [0.4958, 0.4646],
+      [0.5759, 0.5661],
+      [0.6381, 0.0518]
+    ],
+    "Cetaphil": [
+      [0.9382, 0.2825],
+      [0.8004, 0.8488],
+      [0.9034, 0.9667],
+      [0.996, 0.6674]
+    ],
+    "Neutrogena": [
+      [0.1209, 0.1564],
+      [0.2159, 0.7619],
+      [0.3476, 0.6465],
+      [0.2798, 0.0307]
+    ],
+    "DandK": [
+      [0.2797, 0.0185],
+      [0.3459, 0.6514],
+      [0.4241, 0.5763],
+      [0.3781, 0.0048]
+    ],
+    "DermaComp": [
+      [0.6407, 0.0219],
+      [0.5799, 0.5739],
+      [0.6742, 0.6872],
+      [0.778, 0.0403]
+    ]
+  },
+  "zone_id_map": {
+    "GoodVibes": "GOODVIBES",
+    "Pilgrim": "PILGRIM",
+    "Mamaearth": "MAMAEARTH",
+    "Cetaphil": "CETAPHIL",
+    "Neutrogena": "NEUTROGENA",
+    "DandK": "D_AND_K",
+    "DermaComp": "DERMACOMP"
+  },
+  "overlap": {
+    "min_overlap_pct": 10,
+    "min_zone_stability_frames": 15,
+    "lost_track_frames": 30
+  },
+  "dwell": {
+    "min_dwell_seconds": 2.0,
+    "min_zone_dwell_ms": 30000
+  },
+  "detection": {
+    "confidence_threshold": 0.35,
+    "iou_threshold": 0.5,
+    "process_every_n_frames": 10,
+    "progress_log_every_n_frames": 100
+  }
+}

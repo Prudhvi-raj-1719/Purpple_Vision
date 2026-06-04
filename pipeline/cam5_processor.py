@@ -1,0 +1,655 @@
+"""
+CAM5 payment and queue events: YOLO11m + ByteTrack + zone overlap priority.
+
+Store-driven via ``get_store_config()`` (``stores/*/cam5.json`` + ``videos.json``).
+Migrated from NOTEBK ``events/cam5_events.py``; orchestration uses this module (Phase C).
+``queue.py`` remains available for rollback.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
+
+import cv2
+import numpy as np
+import supervision as sv
+from ultralytics import YOLO
+
+from pipeline.cam5_layout import (
+    CAMERA_KEY,
+    OUT_OF_ZONE,
+    PAYMENT_ZONE,
+    QUEUE_ZONE,
+    Cam5ProcessorConfig,
+    build_cam5_processor_config,
+)
+from pipeline.config import parse_clip_start, refresh_store_config
+from pipeline.emit import PipelineEmitter
+from pipeline.sink import EventSink
+from pipeline.store_config import StoreConfig, build_cam5_zone_polygons, resolve_store_config
+from pipeline.video_time import format_video_offset, video_seconds
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class TrackState:
+    current_zone: str = OUT_OF_ZONE
+    zone_enter_time: Optional[float] = None
+    last_seen_frame: int = 0
+    pending_zone: Optional[str] = None
+    pending_zone_start_frame: Optional[int] = None
+    pending_consecutive_frames: int = 0
+
+
+@dataclass
+class Cam5EventStats:
+    """Queue/payment/dwell counters (same shape as legacy ``queue.QueueEventStats``)."""
+
+    queue_enter: int = 0
+    queue_exit: int = 0
+    payment_enter: int = 0
+    payment_exit: int = 0
+    dwell_completed: int = 0
+
+    @property
+    def total(self) -> int:
+        return (
+            self.queue_enter
+            + self.queue_exit
+            + self.payment_enter
+            + self.payment_exit
+            + self.dwell_completed
+        )
+
+
+# Backward-compatible alias for orchestration code expecting QueueEventStats.
+QueueEventStats = Cam5EventStats
+
+
+@dataclass
+class StabilizationStats:
+    ignored_zone_transitions: int = 0
+    ignored_short_dwells: int = 0
+
+
+class PaymentQueueEngine:
+    """CAM5 queue and payment zone engine (NOTEBK ``PaymentEventEngine`` behavior)."""
+
+    def __init__(
+        self,
+        event_sink: EventSink,
+        fps: float,
+        config: Cam5ProcessorConfig,
+    ) -> None:
+        self.event_sink = event_sink
+        self.config = config
+        self.fps = fps if fps > 0 else 30.0
+        self.camera_key = config.camera_key
+        self.payment_zone = config.payment_zone
+        self.queue_zone = config.queue_zone
+        self.min_dwell_seconds = config.min_dwell_seconds
+        self.min_zone_stability_frames = config.min_zone_stability_frames
+        self.lost_track_frames = config.lost_track_frames
+        self.track_states: Dict[int, TrackState] = {}
+        self.stabilization = StabilizationStats()
+        self.stats = Cam5EventStats()
+
+    def _clear_pending(self, state: TrackState) -> None:
+        state.pending_zone = None
+        state.pending_zone_start_frame = None
+        state.pending_consecutive_frames = 0
+
+    def _reject_pending(
+        self,
+        track_id: int,
+        state: TrackState,
+        frame_idx: int,
+    ) -> None:
+        if state.pending_zone is None:
+            return
+        logger.debug(
+            "Zone candidate rejected track=%s committed=%s candidate=%s frames=%s frame=%s",
+            track_id,
+            state.current_zone,
+            state.pending_zone,
+            state.pending_consecutive_frames,
+            frame_idx,
+        )
+        self.stabilization.ignored_zone_transitions += 1
+        self._clear_pending(state)
+
+    def frame_timestamp(self, frame_idx: int) -> str:
+        return format_video_offset(frame_idx, self.fps)
+
+    def frame_time_seconds(self, frame_idx: int) -> float:
+        return video_seconds(frame_idx, self.fps)
+
+    def _emit(self, event: Dict[str, Any]) -> None:
+        event_type = str(event.get("event_type", ""))
+        if event_type == "QUEUE_ENTER":
+            self.stats.queue_enter += 1
+        elif event_type == "QUEUE_EXIT":
+            self.stats.queue_exit += 1
+        elif event_type == "PAYMENT_ENTER":
+            self.stats.payment_enter += 1
+        elif event_type == "PAYMENT_EXIT":
+            self.stats.payment_exit += 1
+        elif event_type == "DWELL_COMPLETED":
+            self.stats.dwell_completed += 1
+        self.event_sink.emit_notbk(event)
+
+    def _emit_queue_enter(self, track_id: int, frame_idx: int) -> None:
+        self._emit(
+            {
+                "visitor_id": track_id,
+                "camera": self.camera_key,
+                "event_type": "QUEUE_ENTER",
+                "timestamp": self.frame_timestamp(frame_idx),
+            }
+        )
+
+    def _emit_queue_exit(self, track_id: int, frame_idx: int) -> None:
+        self._emit(
+            {
+                "visitor_id": track_id,
+                "camera": self.camera_key,
+                "event_type": "QUEUE_EXIT",
+                "timestamp": self.frame_timestamp(frame_idx),
+            }
+        )
+
+    def _emit_payment_enter(self, track_id: int, frame_idx: int) -> None:
+        self._emit(
+            {
+                "visitor_id": track_id,
+                "camera": self.camera_key,
+                "event_type": "PAYMENT_ENTER",
+                "zone": self.payment_zone,
+                "timestamp": self.frame_timestamp(frame_idx),
+            }
+        )
+
+    def _emit_payment_exit(self, track_id: int, frame_idx: int) -> None:
+        self._emit(
+            {
+                "visitor_id": track_id,
+                "camera": self.camera_key,
+                "event_type": "PAYMENT_EXIT",
+                "zone": self.payment_zone,
+                "timestamp": self.frame_timestamp(frame_idx),
+            }
+        )
+
+    def _emit_payment_dwell_completed(
+        self,
+        track_id: int,
+        zone_enter_time: Optional[float],
+        exit_time: float,
+        frame_idx: int,
+    ) -> None:
+        dwell_seconds = 0.0
+        if zone_enter_time is not None:
+            dwell_seconds = max(0.0, exit_time - zone_enter_time)
+
+        if dwell_seconds < self.min_dwell_seconds:
+            self.stabilization.ignored_short_dwells += 1
+            logger.debug(
+                "Ignored short dwell track=%s zone=%s dwell=%.1fs",
+                track_id,
+                self.payment_zone,
+                dwell_seconds,
+            )
+            return
+
+        self._emit(
+            {
+                "visitor_id": track_id,
+                "camera": self.camera_key,
+                "event_type": "DWELL_COMPLETED",
+                "zone": self.payment_zone,
+                "dwell_seconds": round(dwell_seconds, 1),
+                "timestamp": self.frame_timestamp(frame_idx),
+            }
+        )
+
+    def _leave_payment_area(
+        self,
+        track_id: int,
+        state: TrackState,
+        frame_idx: int,
+    ) -> None:
+        exit_time = self.frame_time_seconds(frame_idx)
+        self._emit_payment_exit(track_id, frame_idx)
+        self._emit_payment_dwell_completed(
+            track_id,
+            state.zone_enter_time,
+            exit_time,
+            frame_idx,
+        )
+
+    def _leave_zone(
+        self,
+        track_id: int,
+        state: TrackState,
+        frame_idx: int,
+    ) -> None:
+        if state.current_zone == OUT_OF_ZONE:
+            return
+
+        previous_zone = state.current_zone
+        if previous_zone == self.queue_zone:
+            self._emit_queue_exit(track_id, frame_idx)
+        elif previous_zone == self.payment_zone:
+            self._leave_payment_area(track_id, state, frame_idx)
+
+        state.current_zone = OUT_OF_ZONE
+        state.zone_enter_time = None
+
+    def _handle_zone_change(
+        self,
+        track_id: int,
+        previous_zone: str,
+        current_zone: str,
+        frame_idx: int,
+    ) -> None:
+        state = self.track_states[track_id]
+        enter_time = self.frame_time_seconds(frame_idx)
+
+        if previous_zone == self.queue_zone:
+            self._emit_queue_exit(track_id, frame_idx)
+        elif previous_zone == self.payment_zone:
+            self._leave_payment_area(track_id, state, frame_idx)
+
+        if current_zone == self.queue_zone and previous_zone == OUT_OF_ZONE:
+            self._emit_queue_enter(track_id, frame_idx)
+            state.zone_enter_time = enter_time
+        elif current_zone == self.payment_zone and previous_zone in (
+            OUT_OF_ZONE,
+            self.queue_zone,
+        ):
+            self._emit_payment_enter(track_id, frame_idx)
+            state.zone_enter_time = enter_time
+        elif current_zone != OUT_OF_ZONE:
+            state.zone_enter_time = enter_time
+        else:
+            state.zone_enter_time = None
+
+        state.current_zone = current_zone
+        self._clear_pending(state)
+
+    def _commit_zone_change(
+        self,
+        track_id: int,
+        previous_zone: str,
+        new_zone: str,
+        frame_idx: int,
+    ) -> None:
+        logger.debug(
+            "Zone confirmed track=%s %s -> %s frame=%s",
+            track_id,
+            previous_zone,
+            new_zone,
+            frame_idx,
+        )
+        self._handle_zone_change(track_id, previous_zone, new_zone, frame_idx)
+
+    def _process_detected_zone(
+        self,
+        track_id: int,
+        detected_zone: str,
+        frame_idx: int,
+    ) -> None:
+        state = self.track_states[track_id]
+        committed_zone = state.current_zone
+
+        if detected_zone == committed_zone:
+            self._reject_pending(track_id, state, frame_idx)
+            return
+
+        if state.pending_zone != detected_zone:
+            state.pending_zone = detected_zone
+            state.pending_zone_start_frame = frame_idx
+            state.pending_consecutive_frames = 1
+            logger.debug(
+                "Zone candidate track=%s %s -> %s frame=%s",
+                track_id,
+                committed_zone,
+                detected_zone,
+                frame_idx,
+            )
+            return
+
+        state.pending_consecutive_frames += 1
+        if state.pending_consecutive_frames >= self.min_zone_stability_frames:
+            self._commit_zone_change(
+                track_id,
+                committed_zone,
+                detected_zone,
+                frame_idx,
+            )
+
+    def update_active_tracks(
+        self,
+        frame_idx: int,
+        track_zones: Dict[int, str],
+    ) -> None:
+        active_ids = set(track_zones.keys())
+
+        for track_id, detected_zone in track_zones.items():
+            if track_id not in self.track_states:
+                self.track_states[track_id] = TrackState(last_seen_frame=frame_idx)
+
+            state = self.track_states[track_id]
+            self._process_detected_zone(track_id, detected_zone, frame_idx)
+            state.last_seen_frame = frame_idx
+
+        lost_track_ids = [
+            track_id
+            for track_id, state in self.track_states.items()
+            if track_id not in active_ids
+            and frame_idx - state.last_seen_frame > self.lost_track_frames
+        ]
+        for track_id in lost_track_ids:
+            state = self.track_states[track_id]
+            self._clear_pending(state)
+            self._leave_zone(track_id, state, frame_idx)
+            del self.track_states[track_id]
+
+    def finalize(self, frame_idx: int) -> None:
+        remaining_ids = list(self.track_states.keys())
+        for track_id in remaining_ids:
+            state = self.track_states[track_id]
+            self._clear_pending(state)
+            self._leave_zone(track_id, state, frame_idx)
+            del self.track_states[track_id]
+
+
+def load_cam5_processor_config(
+    store: StoreConfig | None = None,
+) -> Cam5ProcessorConfig:
+    return build_cam5_processor_config(store)
+
+
+def build_zone_polygons(
+    config: Cam5ProcessorConfig,
+    video_width: int,
+    video_height: int,
+    *,
+    store: StoreConfig,
+) -> Dict[str, np.ndarray]:
+    return build_cam5_zone_polygons(store.cam5, video_width, video_height)
+
+
+def create_byte_tracker() -> sv.ByteTrack:
+    return sv.ByteTrack()
+
+
+def detect_persons(
+    frame_bgr: np.ndarray,
+    yolo_model: YOLO,
+    config: Cam5ProcessorConfig,
+) -> sv.Detections:
+    from pipeline.config import PERSON_CLASS_ID
+
+    results = yolo_model.predict(
+        source=frame_bgr,
+        conf=config.confidence_threshold,
+        iou=config.iou_threshold,
+        classes=[PERSON_CLASS_ID],
+        verbose=False,
+        stream=False,
+    )
+    detections = sv.Detections.from_ultralytics(results[0])
+    del results
+    return detections
+
+
+def bbox_polygon_overlap_pct(
+    xyxy: np.ndarray,
+    polygon: np.ndarray,
+    frame_width: int,
+    frame_height: int,
+) -> float:
+    x1, y1, x2, y2 = xyxy
+    bbox_area = max(0.0, float(x2 - x1)) * max(0.0, float(y2 - y1))
+    if bbox_area == 0:
+        return 0.0
+
+    ix1 = max(0, int(x1))
+    iy1 = max(0, int(y1))
+    ix2 = min(frame_width, int(x2))
+    iy2 = min(frame_height, int(y2))
+    if ix2 <= ix1 or iy2 <= iy1:
+        return 0.0
+
+    crop_w = ix2 - ix1
+    crop_h = iy2 - iy1
+    bbox_mask = np.full((crop_h, crop_w), 255, dtype=np.uint8)
+
+    poly_shifted = polygon.copy()
+    poly_shifted[:, 0] -= ix1
+    poly_shifted[:, 1] -= iy1
+    poly_mask = np.zeros((crop_h, crop_w), dtype=np.uint8)
+    cv2.fillPoly(poly_mask, [poly_shifted.reshape(-1, 1, 2)], 255)
+
+    overlap_pixels = cv2.countNonZero(cv2.bitwise_and(bbox_mask, poly_mask))
+    return (float(overlap_pixels) / bbox_area) * 100.0
+
+
+def resolve_zone_by_priority(
+    xyxy: np.ndarray,
+    zone_polygons: Dict[str, np.ndarray],
+    frame_width: int,
+    frame_height: int,
+    *,
+    config: Cam5ProcessorConfig,
+) -> str:
+    for zone_name in config.zone_priority:
+        polygon = zone_polygons.get(zone_name)
+        if polygon is None:
+            continue
+        if (
+            bbox_polygon_overlap_pct(
+                xyxy, polygon, frame_width, frame_height
+            )
+            >= config.min_overlap_pct
+        ):
+            return zone_name
+    return OUT_OF_ZONE
+
+
+def assign_track_zones(
+    detections: sv.Detections,
+    zone_polygons: Dict[str, np.ndarray],
+    frame_width: int,
+    frame_height: int,
+    *,
+    config: Cam5ProcessorConfig,
+) -> Dict[int, str]:
+    if detections.tracker_id is None or len(detections) == 0:
+        return {}
+
+    track_zones: Dict[int, str] = {}
+    for track_id, xyxy in zip(detections.tracker_id, detections.xyxy):
+        tid = int(track_id)
+        track_zones[tid] = resolve_zone_by_priority(
+            xyxy,
+            zone_polygons,
+            frame_width,
+            frame_height,
+            config=config,
+        )
+    return track_zones
+
+
+def process_cam5_video(
+    video_path: Path | None = None,
+    *,
+    emitter: PipelineEmitter | None = None,
+    show_window: bool = False,
+    model_path: Path | None = None,
+    store: StoreConfig | None = None,
+) -> Cam5EventStats:
+    """
+    Run CAM5 queue/payment pipeline with store config (``cam5.json``).
+
+    Matches legacy ``queue.process_cam5_video`` for ``demo_runner`` orchestration.
+    """
+    if emitter is None:
+        raise ValueError("emitter is required for CAM5 pipeline output")
+
+    cfg = resolve_store_config(store)
+    if not cfg.cam5.enabled:
+        raise RuntimeError(f"{cfg.store_key}: CAM5 is disabled in cam5.json")
+
+    config = build_cam5_processor_config(cfg)
+    path = video_path or config.primary_video_path
+    if path is None:
+        raise FileNotFoundError(f"{cfg.store_key}: no CAM5 video configured")
+
+    weights = model_path or Path(os.getenv("YOLO_MODEL_PATH", config.yolo_model_path))
+    capture = cv2.VideoCapture(str(path))
+    if not capture.isOpened():
+        raise FileNotFoundError(f"Unable to open video: {path}")
+
+    video_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+    video_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = float(capture.get(cv2.CAP_PROP_FPS) or 30.0)
+    total_frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    logger.info(
+        "CAM5 store=%s coord=%s resolution %sx%s @ %.2f fps, %s frames, "
+        "inference every %s overlap>=%s%% stability=%s dwell>=%ss",
+        config.store_key,
+        config.coordinate_system,
+        video_width,
+        video_height,
+        fps,
+        total_frames,
+        config.process_every_n_frames,
+        config.min_overlap_pct,
+        config.min_zone_stability_frames,
+        config.min_dwell_seconds,
+    )
+
+    yolo_model = YOLO(str(weights))
+    zone_polygons = build_zone_polygons(
+        config, video_width, video_height, store=cfg
+    )
+    engine = PaymentQueueEngine(event_sink=emitter, fps=fps, config=config)
+    tracker = create_byte_tracker()
+
+    original_frame = 0
+    processed_count = 0
+    try:
+        while capture.isOpened():
+            try:
+                success, frame = capture.read()
+            except cv2.error as exc:
+                logger.warning("OpenCV read error: %s", exc)
+                break
+
+            if not success or frame is None:
+                break
+
+            if original_frame % config.process_every_n_frames != 0:
+                original_frame += 1
+                if original_frame % config.progress_log_every_n_frames == 0:
+                    pct = 100.0 * original_frame / total_frames if total_frames > 0 else 0.0
+                    logger.info(
+                        "[PROGRESS] CAM5 frame=%s processed=%s (%.1f%% complete) "
+                        "queue_enter=%s queue_exit=%s payment_enter=%s payment_exit=%s",
+                        original_frame,
+                        processed_count,
+                        pct,
+                        engine.stats.queue_enter,
+                        engine.stats.queue_exit,
+                        engine.stats.payment_enter,
+                        engine.stats.payment_exit,
+                    )
+                del frame
+                continue
+
+            detections = detect_persons(frame, yolo_model, config)
+            detections = tracker.update_with_detections(detections)
+            track_zones = assign_track_zones(
+                detections,
+                zone_polygons,
+                video_width,
+                video_height,
+                config=config,
+            )
+            engine.update_active_tracks(original_frame, track_zones)
+            processed_count += 1
+            del frame, detections, track_zones
+            original_frame += 1
+            if original_frame % config.progress_log_every_n_frames == 0:
+                pct = 100.0 * original_frame / total_frames if total_frames > 0 else 0.0
+                logger.info(
+                    "[PROGRESS] CAM5 frame=%s processed=%s (%.1f%% complete) "
+                    "queue_enter=%s queue_exit=%s payment_enter=%s payment_exit=%s",
+                    original_frame,
+                    processed_count,
+                    pct,
+                    engine.stats.queue_enter,
+                    engine.stats.queue_exit,
+                    engine.stats.payment_enter,
+                    engine.stats.payment_exit,
+                )
+    finally:
+        engine.finalize(original_frame)
+        capture.release()
+
+    pct = 100.0 * original_frame / total_frames if total_frames > 0 else 0.0
+    logger.info(
+        "CAM5 complete: frames=%s processed=%s (%.1f%%) events=%s "
+        "ignored_transitions=%s ignored_short_dwells=%s",
+        original_frame,
+        processed_count,
+        pct,
+        engine.stats.total,
+        engine.stabilization.ignored_zone_transitions,
+        engine.stabilization.ignored_short_dwells,
+    )
+    return engine.stats
+
+
+def run_cli(
+    output_path: Path | None = None,
+    *,
+    show_window: bool = False,
+    store: StoreConfig | None = None,
+) -> None:
+    """CLI: process CAM5 and write Purpple-schema JSONL via ``PipelineEmitter``."""
+    cfg = resolve_store_config(store)
+    refresh_store_config(cfg.store_key)
+    config = build_cam5_processor_config(cfg)
+    out = output_path or config.default_events_output_path
+    clip_start = parse_clip_start(CAMERA_KEY, store=cfg)
+    with PipelineEmitter(
+        output_path=out,
+        store_id=cfg.store_id,
+        clip_start_by_camera={CAMERA_KEY: clip_start},
+    ) as emitter:
+        stats = process_cam5_video(emitter=emitter, show_window=show_window, store=cfg)
+        logger.info(
+            "CAM5 stats: queue_in=%s queue_out=%s payment_in=%s payment_out=%s dwell=%s; "
+            "wrote %s events (%s errors)",
+            stats.queue_enter,
+            stats.queue_exit,
+            stats.payment_enter,
+            stats.payment_exit,
+            stats.dwell_completed,
+            emitter.stats.events_written,
+            emitter.stats.adaptation_errors,
+        )
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    run_cli(show_window=False)

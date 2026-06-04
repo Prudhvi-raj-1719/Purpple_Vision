@@ -11,7 +11,7 @@
 |-------|--------------|
 | **Bridge script** | `scripts/bridge_pipeline_to_product.py` — loads JSONL + POS CSV into SQLite using the same logic as HTTP ingest |
 | **Demo runner** | `scripts/demo_runner.py` — one command: cameras → POS → purchase matching → bridge → synthetic validation → report |
-| **Isolated demo DB** | `data/databases/demo_product.db` — fresh database every run (does not touch `store_intelligence.db`) |
+| **Per-store intelligence DB** | `store_1_intelligence.db` / `store_2_intelligence.db` from `stores/*/store.json` — fresh per CCTV demo run (does not touch `store_intelligence.db` or `store_*_validation.db`) |
 | **Clean outputs** | Each `scripts/demo_runner.py` run clears `pipeline_demo/*` and `purchase_matches.json` before processing |
 | **Streamlit dashboard** | `dashboard/streamlit_app.py` — reads FastAPI only (metrics, funnel, heatmap, anomalies, health) |
 | **Synthetic validation** | `scripts/demo_validation_run.py` — proves non-zero sessions and revenue with ENTRY-based test data |
@@ -23,7 +23,7 @@
 ```
 CCTV clips → CAM1/2/3/5 processors → JSONL in data/outputs/pipeline/pipeline_demo/
 POS CSV    → pos_loader           → data/outputs/pos/
-Bridge     → demo_product.db      → sessions + KPIs
+Bridge     → store_N_intelligence.db → sessions + KPIs
 FastAPI    → GET /metrics, /funnel, /heatmap, /anomalies
 Streamlit  → reviewer dashboard
 ```

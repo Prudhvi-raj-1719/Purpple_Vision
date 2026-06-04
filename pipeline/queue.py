@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -12,16 +13,11 @@ import numpy as np
 import supervision as sv
 from ultralytics import YOLO
 
-from pipeline.config import (
-    CAM5_ZONES,
-    CAMERA_VIDEO_FILES,
-    DEFAULT_STORE_ID,
-    MODEL_PATH,
-    OUTPUT_DIR,
-    PERSON_CLASS_ID,
-    PROCESS_EVERY_N_FRAMES,
-    PROGRESS_LOG_EVERY_N_FRAMES,
-    parse_clip_start,
+from pipeline.config import MODEL_PATH, PERSON_CLASS_ID, parse_clip_start, refresh_store_config
+from pipeline.store_config import (
+    StoreConfig,
+    build_cam5_zone_polygons,
+    resolve_store_config,
 )
 from pipeline.emit import PipelineEmitter
 from pipeline.sink import EventSink
@@ -370,11 +366,14 @@ def denormalize_polygon(
     )
 
 
-def build_zone_polygons(video_width: int, video_height: int) -> Dict[str, np.ndarray]:
-    return {
-        name: denormalize_polygon(points, video_width, video_height)
-        for name, points in CAM5_ZONES.items()
-    }
+def build_zone_polygons(
+    video_width: int,
+    video_height: int,
+    *,
+    store: StoreConfig | None = None,
+) -> Dict[str, np.ndarray]:
+    cfg = resolve_store_config(store)
+    return build_cam5_zone_polygons(cfg.cam5, video_width, video_height)
 
 
 def create_byte_tracker() -> sv.ByteTrack:
@@ -481,13 +480,26 @@ def process_cam5_video(
     *,
     emitter: PipelineEmitter | None = None,
     show_window: bool = False,
-    model_path: Path = MODEL_PATH,
+    model_path: Path | None = None,
+    store: StoreConfig | None = None,
 ) -> QueueEventStats:
     """Run CAM5 queue/payment pipeline; optional Purpple JSONL via emitter."""
     if emitter is None:
         raise ValueError("emitter is required for CAM5 pipeline output")
 
-    path = video_path or CAMERA_VIDEO_FILES[CAMERA_KEY]
+    cfg = resolve_store_config(store)
+    if not cfg.cam5.enabled:
+        raise RuntimeError(f"{cfg.store_key}: CAM5 is disabled in cam5.json")
+
+    path = video_path or cfg.videos.video_path(CAMERA_KEY)
+    if path is None:
+        raise FileNotFoundError(f"{cfg.store_key}: no CAM5 video configured")
+
+    weights = model_path or Path(os.getenv("YOLO_MODEL_PATH", cfg.yolo_model_path))
+    process_every_n = cfg.cam5.detection.process_every_n_frames
+    progress_every_n = cfg.cam5.detection.progress_log_every_n_frames
+    confidence_threshold = cfg.cam5.detection.confidence_threshold
+    iou_threshold = cfg.cam5.detection.iou_threshold
     capture = cv2.VideoCapture(str(path))
     if not capture.isOpened():
         raise FileNotFoundError(f"Unable to open video: {path}")
@@ -503,11 +515,13 @@ def process_cam5_video(
         video_height,
         fps,
         total_frames,
-        PROCESS_EVERY_N_FRAMES,
+        process_every_n,
     )
 
-    yolo_model = YOLO(str(model_path))
-    zone_polygons = build_zone_polygons(video_width, video_height)
+    yolo_model = YOLO(str(weights))
+    zone_polygons = build_zone_polygons(
+        video_width, video_height, store=cfg
+    )
     engine = PaymentQueueEngine(event_sink=emitter, fps=fps)
     tracker = create_byte_tracker()
 
@@ -524,9 +538,9 @@ def process_cam5_video(
             if not success or frame is None:
                 break
 
-            if original_frame % PROCESS_EVERY_N_FRAMES != 0:
+            if original_frame % process_every_n != 0:
                 original_frame += 1
-                if original_frame % PROGRESS_LOG_EVERY_N_FRAMES == 0:
+                if original_frame % progress_every_n == 0:
                     pct = 100.0 * original_frame / total_frames if total_frames > 0 else 0.0
                     logger.info(
                         "[PROGRESS] CAM5 frame=%s processed=%s (%.1f%% complete) "
@@ -542,7 +556,12 @@ def process_cam5_video(
                 del frame
                 continue
 
-            detections = detect_persons(frame, yolo_model)
+            detections = detect_persons(
+                frame,
+                yolo_model,
+                conf=confidence_threshold,
+                iou=iou_threshold,
+            )
             detections = tracker.update_with_detections(detections)
             track_zones = assign_track_zones(
                 detections, zone_polygons, video_width, video_height
@@ -551,7 +570,7 @@ def process_cam5_video(
             processed_count += 1
             del frame, detections, track_zones
             original_frame += 1
-            if original_frame % PROGRESS_LOG_EVERY_N_FRAMES == 0:
+            if original_frame % progress_every_n == 0:
                 pct = 100.0 * original_frame / total_frames if total_frames > 0 else 0.0
                 logger.info(
                     "[PROGRESS] CAM5 frame=%s processed=%s (%.1f%% complete) "
@@ -583,15 +602,18 @@ def run_cli(
     output_path: Path | None = None,
     *,
     show_window: bool = False,
+    store: StoreConfig | None = None,
 ) -> None:
-    out = output_path or (OUTPUT_DIR / "cam5_events.jsonl")
-    clip_start = parse_clip_start(CAMERA_KEY)
+    cfg = resolve_store_config(store)
+    refresh_store_config(cfg.store_key)
+    out = output_path or (cfg.pipeline_output_dir / "cam5_events.jsonl")
+    clip_start = parse_clip_start(CAMERA_KEY, store=cfg)
     with PipelineEmitter(
         output_path=out,
-        store_id=DEFAULT_STORE_ID,
+        store_id=cfg.store_id,
         clip_start_by_camera={CAMERA_KEY: clip_start},
     ) as emitter:
-        process_cam5_video(emitter=emitter, show_window=show_window)
+        process_cam5_video(emitter=emitter, show_window=show_window, store=cfg)
         logger.info(
             "Wrote %s Purpple events (%s NOTEBK rows, %s errors)",
             emitter.stats.purpple_written,

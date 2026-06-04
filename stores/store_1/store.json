@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "store_key": "store_1",
+  "store_id": "STORE_BLR_002",
+  "display_name": "Brigade Bangalore",
+  "database_path": "data/databases/store_1_intelligence.db",
+  "pos_csv_path": "data/pos/Brigade_Bangalore_10_April_26.csv",
+  "pos_store_code": "ST1008",
+  "pos_sale_date": "2026-04-10",
+  "yolo_model_path": "models/yolo11m.pt",
+  "output_subdir": "pipeline_demo_store_1",
+  "default_event_confidence": 0.85,
+  "camera_competition_ids": {
+    "CAM1": "CAM_SHELF_01",
+    "CAM2": "CAM_SHELF_02",
+    "CAM3": "CAM_ENTRY_01",
+    "CAM4": "CAM_STAFF_01",
+    "CAM5": "CAM_BILLING_01"
+  }
+}

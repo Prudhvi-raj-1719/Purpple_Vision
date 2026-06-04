@@ -9,14 +9,21 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from sqlalchemy.engine import Engine
 from sqlalchemy.engine.url import make_url
 
+if TYPE_CHECKING:
+    from pipeline.store_config import StoreConfig
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
+# Legacy shared demo DB (rollback only; demo_runner uses per-store intelligence DBs).
 DEMO_PRODUCT_DB = REPO_ROOT / "data" / "databases" / "demo_product.db"
 DEMO_VALIDATION_DB = REPO_ROOT / "data" / "databases" / "demo_validation.db"
+STORE_1_VALIDATION_DB = REPO_ROOT / "data" / "databases" / "store_1_validation.db"
+STORE_2_VALIDATION_DB = REPO_ROOT / "data" / "databases" / "store_2_validation.db"
 STORE_INTELLIGENCE_DB = REPO_ROOT / "data" / "databases" / "store_intelligence.db"
 
 DEMO_RUN_REPORT_PATHS = (
@@ -24,8 +31,10 @@ DEMO_RUN_REPORT_PATHS = (
     REPO_ROOT / "docs" / "reports" / "demo_run_report.md",
 )
 DEMO_VALIDATION_REPORT_PATHS = (
-    REPO_ROOT / "demo_validation_report.md",
-    REPO_ROOT / "docs" / "reports" / "demo_validation_report.md",
+    REPO_ROOT / "demo_validation_report_store_1.md",
+    REPO_ROOT / "docs" / "reports" / "demo_validation_report_store_1.md",
+    REPO_ROOT / "demo_validation_report_store_2.md",
+    REPO_ROOT / "docs" / "reports" / "demo_validation_report_store_2.md",
 )
 
 AGGREGATED_POS_DIR = REPO_ROOT / "data" / "outputs" / "pos"
@@ -50,11 +59,54 @@ def force_database_url(db_path: Path) -> str:
     return url
 
 
+def intelligence_database_path(cfg: StoreConfig) -> Path:
+    """Resolve per-store CCTV intelligence SQLite path from ``store.json``."""
+    if cfg.database_path is None:
+        raise ValueError(
+            f"{cfg.store_key}: database_path is missing in stores/{cfg.store_key}/store.json"
+        )
+    return cfg.database_path.resolve()
+
+
+def assert_deletable_for_cctv_run(db_path: Path, *, active_store_key: str) -> None:
+    """
+    CCTV demo runs may reset only the active store's intelligence DB.
+
+    Refuses production, validation DBs, the other store's intelligence file, and
+    any path that does not match the active store configuration.
+    """
+    from pipeline.store_config import get_store_config
+
+    resolved = db_path.resolve()
+    if resolved == STORE_INTELLIGENCE_DB.resolve():
+        raise RuntimeError(
+            "Refusing to delete production database store_intelligence.db"
+        )
+    if resolved in (
+        STORE_1_VALIDATION_DB.resolve(),
+        STORE_2_VALIDATION_DB.resolve(),
+        DEMO_VALIDATION_DB.resolve(),
+    ):
+        raise RuntimeError(
+            "Refusing to delete validation database during CCTV demo run"
+        )
+
+    expected = intelligence_database_path(
+        get_store_config(active_store_key)
+    ).resolve()
+    if resolved != expected:
+        raise RuntimeError(
+            f"Refusing to delete {resolved}; CCTV demo for {active_store_key!r} "
+            f"may only reset {expected}"
+        )
+
+
 def delete_sqlite_database(db_path: Path) -> bool:
     """
     Remove a SQLite database file and WAL/SHM sidecars if present.
 
-    Never touches store_intelligence.db.
+    Never touches store_intelligence.db. Synthetic validation uses this for
+    validation DB resets; use ``delete_sqlite_database_for_cctv_run`` for CCTV demos.
     """
     resolved = db_path.resolve()
     if resolved == STORE_INTELLIGENCE_DB.resolve():
@@ -68,6 +120,12 @@ def delete_sqlite_database(db_path: Path) -> bool:
             path.unlink()
             removed = True
     return removed
+
+
+def delete_sqlite_database_for_cctv_run(db_path: Path, *, active_store_key: str) -> bool:
+    """Delete SQLite files for a CCTV demo after ``assert_deletable_for_cctv_run``."""
+    assert_deletable_for_cctv_run(db_path, active_store_key=active_store_key)
+    return delete_sqlite_database(db_path)
 
 
 def resolve_engine_database_path(engine: Engine) -> Path:
@@ -104,6 +162,18 @@ def assert_demo_database_path(
             f"{label}: engine path {actual} != expected {expected_resolved}"
         )
     return actual
+
+
+def clean_notbk_mirror_files(directory: Path) -> int:
+    """Remove legacy *.notbk.jsonl mirror files from a pipeline output directory."""
+    if not directory.is_dir():
+        return 0
+    removed = 0
+    for path in directory.glob("*.notbk.jsonl"):
+        if path.is_file():
+            path.unlink()
+            removed += 1
+    return removed
 
 
 def clean_directory_files(directory: Path) -> bool:

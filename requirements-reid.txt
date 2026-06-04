@@ -1,0 +1,7 @@
+# CAM3 OSNet Re-ID (install after base requirements.txt)
+# Usage: pip install -r requirements-reid.txt
+torch>=2.0.0
+torchvision>=0.15.0
+torchreid==0.2.5
+gdown>=4.0.0
+tensorboard>=2.0.0

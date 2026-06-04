@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "camera_key": "CAM4",
+  "enabled": true,
+  "competition_camera_id": "CAM_STAFF_01",
+  "emit_events": false,
+  "detection": {
+    "confidence_threshold": 0.35,
+    "iou_threshold": 0.5,
+    "process_every_n_frames": 10,
+    "progress_log_every_n_frames": 100
+  }
+}

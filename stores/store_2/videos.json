@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "cctv_dir": "data/cctv/Store2",
+  "cameras": {
+    "CAM1": {
+      "video": "zone.mp4",
+      "clip_start": "2026-04-10 20:10:27"
+    },
+    "CAM2": {
+      "video": null,
+      "clip_start": null,
+      "enabled": false
+    },
+    "CAM3": {
+      "video": null,
+      "clip_start": null,
+      "enabled": true,
+      "note": "Single-file CAM3 unused; entry footage is in cam3_clips below"
+    },
+    "CAM5": {
+      "video": "billing_area.mp4",
+      "clip_start": "2026-04-10 20:09:48"
+    }
+  },
+  "cam3_clips": [
+    {
+      "clip_id": "entry1",
+      "video": "entry 1.mp4",
+      "clip_start": "2026-04-10 14:00:00",
+      "process_every_n_frames": 5,
+      "output_events_basename": "cam3_footage2_entry1_events.jsonl"
+    },
+    {
+      "clip_id": "entry2",
+      "video": "entry 2.mp4",
+      "clip_start": "2026-04-10 15:00:00",
+      "process_every_n_frames": 2,
+      "output_events_basename": "cam3_footage2_entry2_events.jsonl"
+    }
+  ]
+}

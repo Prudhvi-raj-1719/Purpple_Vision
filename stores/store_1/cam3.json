@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "camera_key": "CAM3",
+  "enabled": true,
+  "competition_camera_id": "CAM_ENTRY_01",
+  "entry": {
+    "line_polygon": [
+      [0.595, 0.4444],
+      [0.4498, 0.751],
+      [0.4714, 0.7759],
+      [0.6121, 0.4566]
+    ],
+    "store_ref": [0.55, 0.48],
+    "line_style": "polygon",
+    "entry_plane_y_norm": 0.54,
+    "invert_retail_semantics": false
+  },
+  "detection": {
+    "confidence_threshold": 0.35,
+    "iou_threshold": 0.55,
+    "yolo_imgsz": 960,
+    "yolo_max_det": 50,
+    "process_every_n_frames": 10,
+    "progress_log_every_n_frames": 100
+  },
+  "byte_track": {
+    "activation_threshold": 0.2,
+    "min_consecutive_frames": 1,
+    "max_time_lost": 90,
+    "disable_bytetrack_env": "CAM3_DISABLE_BYTETRACK"
+  },
+  "recovery": {
+    "entry_stability_frames": 2,
+    "exit_stability_frames": 2,
+    "enable_threshold_recovery": true,
+    "near_threshold_y_tolerance": 0.1,
+    "threshold_observation_frames": 3,
+    "threshold_motion_eps": 0.015,
+    "enable_track_loss_flush": true,
+    "track_loss_grace_frames": 35,
+    "track_loss_motion_eps": 0.5,
+    "track_loss_flush_require_stable_pending": true,
+    "enable_late_entry_recovery": true,
+    "late_entry_y_band_below": 0.22,
+    "late_entry_require_near_threshold": false
+  },
+  "reentry": {
+    "time_window_seconds": 180,
+    "location_max_norm_dist": 0.12,
+    "entry_y_tolerance": 0.1
+  },
+  "reid": {
+    "enabled": false,
+    "heuristic_fallback": false,
+    "debug": false,
+    "model_name": "osnet_x1_0",
+    "device": "cpu",
+    "cosine_threshold": 0.8,
+    "exit_cache_seconds": 180,
+    "min_dwell_after_exit_seconds": 2.0,
+    "min_crop_area": 2000,
+    "track_embed_history": 10,
+    "session_match_enabled": false,
+    "session_match_threshold": 0.85,
+    "session_margin_threshold": 0.1,
+    "area_ratio_min": 0.5,
+    "area_ratio_max": 2.0,
+    "session_max_age_seconds": 180,
+    "near_doorway_y_tolerance": 0.1,
+    "fragment_match_threshold": 0.76,
+    "fragment_margin_threshold": 0.05
+  }
+}

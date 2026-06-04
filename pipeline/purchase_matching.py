@@ -15,7 +15,7 @@ from pipeline.config import (
     PIPELINE_DEMO_DIR,
     PURCHASE_MATCHES_JSON,
 )
-from pipeline.event_adapter import resolve_utc_timestamp
+from pipeline.event_adapter import coerce_matching_event_row, resolve_utc_timestamp
 from pipeline.pos_loader import load_aggregated_transactions
 
 logger = logging.getLogger(__name__)
@@ -31,9 +31,9 @@ QUEUE_ZONE_NAMES = frozenset({"BillingQueue"})
 PAYMENT_ZONE_NAMES = frozenset({"PaymentArea"})
 
 DEFAULT_EVENT_FILES: dict[str, Path] = {
-    "CAM1": PIPELINE_DEMO_DIR / "cam1_events.notbk.jsonl",
-    "CAM2": PIPELINE_DEMO_DIR / "cam2_events.notbk.jsonl",
-    "CAM5": PIPELINE_DEMO_DIR / "cam5_events.notbk.jsonl",
+    "CAM1": PIPELINE_DEMO_DIR / "cam1_events.jsonl",
+    "CAM2": PIPELINE_DEMO_DIR / "cam2_events.jsonl",
+    "CAM5": PIPELINE_DEMO_DIR / "cam5_events.jsonl",
 }
 
 
@@ -47,8 +47,10 @@ class MatchingStats:
 
 
 def parse_event_datetime(value: str) -> datetime:
-    """Parse NOTEBK-style event_datetime string to naive datetime."""
+    """Parse ISO-style event timestamp to naive datetime."""
     text = value.strip().replace(" ", "T")
+    if text.endswith("Z"):
+        text = text[:-1]
     if "." in text:
         base, frac = text.split(".", 1)
         millis = int(frac.ljust(3, "0")[:3])
@@ -83,13 +85,12 @@ def resolve_event_wall_clock(event: dict[str, Any], camera_id: str) -> datetime 
 
 
 def discover_event_file(camera_id: str, demo_dir: Path | None = None) -> Path | None:
-    """Prefer camN_events.notbk.jsonl, fallback to camN_events.jsonl."""
+    """Return camN_events.jsonl when present and non-empty."""
     base = demo_dir or PIPELINE_DEMO_DIR
     cam_lower = camera_id.lower()
-    for name in (f"{cam_lower}_events.notbk.jsonl", f"{cam_lower}_events.jsonl"):
-        path = base / name
-        if path.is_file() and path.stat().st_size > 0:
-            return path
+    path = base / f"{cam_lower}_events.jsonl"
+    if path.is_file() and path.stat().st_size > 0:
+        return path
     return None
 
 
@@ -131,6 +132,8 @@ def load_events_by_camera(
                         f"{path.name} line {line_no}: JSON error ({exc})"
                     )
                     continue
+
+                event = coerce_matching_event_row(event)
 
                 parsed = resolve_event_wall_clock(event, camera_id)
                 if parsed is None:

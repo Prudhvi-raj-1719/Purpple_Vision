@@ -14,14 +14,11 @@ import cv2
 import numpy as np
 import supervision as sv
 
-from pipeline.config import (
-    CAM3_ENTRY_LINE_POLYGON,
-    CAMERA_VIDEO_FILES,
-    DEFAULT_STORE_ID,
-    OUTPUT_DIR,
-    PROCESS_EVERY_N_FRAMES,
-    PROGRESS_LOG_EVERY_N_FRAMES,
-    parse_clip_start,
+from pipeline.config import parse_clip_start, refresh_store_config
+from pipeline.store_config import (
+    StoreConfig,
+    entry_line_as_legacy_list,
+    resolve_store_config,
 )
 from pipeline.detect import detect_persons, load_yolo_model
 from pipeline.emit import PipelineEmitter
@@ -169,18 +166,17 @@ def _assign_raw_track_ids(detections: sv.Detections) -> sv.Detections:
     return detections
 
 
-def process_cam3_video(
-    video_path: Path | None = None,
+def _process_cam3_video_once(
+    path: Path,
     *,
+    cfg: StoreConfig,
     emitter: PipelineEmitter | None = None,
     show_window: bool = False,
 ) -> EntryExitStats:
-    """
-    Run CAM3 entry/exit pipeline on a video file.
-
-    When ``emitter`` is provided, writes Purpple-schema JSONL via event_adapter.
-    """
-    path = video_path or CAMERA_VIDEO_FILES[CAMERA_KEY]
+    """Run CAM3 entry/exit on a single video path using store cam3.json tuning."""
+    process_every_n = cfg.cam3.detection.process_every_n_frames
+    progress_every_n = cfg.cam3.detection.progress_log_every_n_frames
+    entry_line = entry_line_as_legacy_list(cfg.cam3.entry)
     logger.info("[DEBUG] Opening video: %s", path)
     t_open = time.perf_counter()
     capture = cv2.VideoCapture(str(path))
@@ -208,7 +204,7 @@ def process_cam3_video(
     logger.info("[DEBUG] YOLO model loaded in %.2fs", time.perf_counter() - t_yolo_load)
 
     entry_polygon = denormalize_polygon(
-        CAM3_ENTRY_LINE_POLYGON,
+        entry_line,
         video_width,
         video_height,
     )
@@ -229,8 +225,10 @@ def process_cam3_video(
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
 
     logger.info(
-        "CAM3 inference stride: every %s frames (same as CAM1/CAM2)",
-        PROCESS_EVERY_N_FRAMES,
+        "CAM3 inference stride: every %s frames (%s entry_style=%s)",
+        process_every_n,
+        cfg.store_key,
+        cfg.cam3.entry.line_style,
     )
 
     frame_idx = 0
@@ -266,9 +264,9 @@ def process_cam3_video(
                 )
                 break
 
-            if frame_idx % PROCESS_EVERY_N_FRAMES != 0:
+            if frame_idx % process_every_n != 0:
                 frame_idx += 1
-                if frame_idx % PROGRESS_LOG_EVERY_N_FRAMES == 0:
+                if frame_idx % progress_every_n == 0:
                     pct = 100.0 * frame_idx / total_frames if total_frames > 0 else 0.0
                     logger.info(
                         "[PROGRESS] frame=%s processed=%s (%.1f%% complete) "
@@ -323,7 +321,7 @@ def process_cam3_video(
                 )
 
             frame_idx += 1
-            if frame_idx % PROGRESS_LOG_EVERY_N_FRAMES == 0:
+            if frame_idx % progress_every_n == 0:
                 pct = 100.0 * frame_idx / total_frames if total_frames > 0 else 0.0
                 logger.info(
                     "[PROGRESS] frame=%s processed=%s (%.1f%% complete) "
@@ -359,25 +357,72 @@ def process_cam3_video(
         read_failures,
         counter.stats.entry_count,
         counter.stats.exit_count,
-        PROCESS_EVERY_N_FRAMES,
+        process_every_n,
     )
     return counter.stats
+
+
+def process_cam3_video(
+    video_path: Path | None = None,
+    *,
+    emitter: PipelineEmitter | None = None,
+    show_window: bool = False,
+    store: StoreConfig | None = None,
+) -> EntryExitStats:
+    """
+    Run CAM3 entry/exit pipeline on configured video(s).
+
+    When ``cam3_clips`` are set in ``videos.json`` (store_2), processes each clip
+    sequentially. ``horizontal_y`` / ReID require a later phase; polygon crossing
+    uses ``entry.line_polygon`` from cam3.json.
+    """
+    cfg = resolve_store_config(store)
+    if not cfg.cam3.enabled:
+        raise RuntimeError(f"{cfg.store_key}: CAM3 is disabled in cam3.json")
+
+    if cfg.videos.cam3_clips:
+        combined = EntryExitStats()
+        for clip in cfg.videos.cam3_clips:
+            clip_path = video_path or cfg.videos.cam3_clip_video_path(clip.clip_id)
+            logger.info("CAM3 clip %s: %s", clip.clip_id, clip_path)
+            clip_stats = _process_cam3_video_once(
+                clip_path,
+                cfg=cfg,
+                emitter=emitter,
+                show_window=show_window,
+            )
+            combined.entry_count += clip_stats.entry_count
+            combined.exit_count += clip_stats.exit_count
+        return combined
+
+    path = video_path or cfg.videos.video_path(CAMERA_KEY)
+    if path is None:
+        raise FileNotFoundError(f"{cfg.store_key}: no CAM3 video configured")
+    return _process_cam3_video_once(
+        path,
+        cfg=cfg,
+        emitter=emitter,
+        show_window=show_window,
+    )
 
 
 def run_cli(
     output_path: Path | None = None,
     *,
     show_window: bool = False,
+    store: StoreConfig | None = None,
 ) -> None:
     """CLI entry: process CAM3 and write adapted events JSONL."""
-    out = output_path or (OUTPUT_DIR / "cam3_events.jsonl")
-    clip_start = parse_clip_start(CAMERA_KEY)
+    cfg = resolve_store_config(store)
+    refresh_store_config(cfg.store_key)
+    out = output_path or (cfg.pipeline_output_dir / "cam3_events.jsonl")
+    clip_start = parse_clip_start(CAMERA_KEY, store=cfg)
     with PipelineEmitter(
         output_path=out,
-        store_id=DEFAULT_STORE_ID,
+        store_id=cfg.store_id,
         clip_start_by_camera={CAMERA_KEY: clip_start},
     ) as emitter:
-        process_cam3_video(emitter=emitter, show_window=show_window)
+        process_cam3_video(emitter=emitter, show_window=show_window, store=cfg)
         logger.info(
             "Wrote %s Purpple events (%s adapted, %s errors)",
             emitter.stats.purpple_written,

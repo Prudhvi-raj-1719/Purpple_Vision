@@ -60,6 +60,10 @@ coverage.xml
 *.db-shm
 *.db-wal
 
+# Legacy demo outputs (superseded by pipeline_demo_store_1 / pipeline_demo_store_2)
+data/outputs/pipeline/pipeline_demo/
+data/outputs/pipeline/pipeline_demo_report.txt
+
 # Dataset files (challenge data — do not commit)
 data/clips/
 data/cctv/

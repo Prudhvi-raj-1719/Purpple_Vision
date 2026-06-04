@@ -6,6 +6,6 @@ from typing import Any, Protocol
 
 
 class EventSink(Protocol):
-    """Accept NOTEBK-shaped behavioural events for adapter-backed emission."""
+    """Accept internal pipeline rows for challenge-schema JSONL emission."""
 
     def emit_notbk(self, row: dict[str, Any]) -> object | None: ...

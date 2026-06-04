@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "cctv_dir": "data/cctv/Brigade_Bangalore",
+  "cameras": {
+    "CAM1": {
+      "video": "CAM 1.mp4",
+      "clip_start": "2026-04-10 20:10:27"
+    },
+    "CAM2": {
+      "video": "CAM 2.mp4",
+      "clip_start": "2026-04-10 20:10:02"
+    },
+    "CAM3": {
+      "video": "CAM 3.mp4",
+      "clip_start": "2026-04-10 20:10:15"
+    },
+    "CAM4": {
+      "video": "CAM 4.mp4",
+      "clip_start": "2026-04-10 20:10:10"
+    },
+    "CAM5": {
+      "video": "CAM 5.mp4",
+      "clip_start": "2026-04-10 20:09:48"
+    }
+  },
+  "cam3_clips": []
+}

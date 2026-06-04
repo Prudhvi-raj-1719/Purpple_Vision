@@ -4,6 +4,15 @@ from __future__ import annotations
 
 import math
 import os
+import sys
+from pathlib import Path
+
+# Streamlit runs this file with dashboard/ on sys.path; repo root is required
+# for ``from dashboard.*`` and ``from scripts.*`` (via validation_context).
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any
@@ -12,7 +21,17 @@ import httpx
 import plotly.graph_objects as go
 import streamlit as st
 
+from dashboard.validation_context import (
+    api_base_url_for_store,
+    bind_validation_database,
+    dashboard_store_options,
+    list_event_dates_from_db,
+    load_analytics_from_validation_db,
+    use_api_client,
+)
+
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000").rstrip("/")
+DEFAULT_STORE_KEY = os.getenv("DEFAULT_DASHBOARD_STORE", "store_1")
 DEFAULT_STORE_ID = os.getenv("DEFAULT_STORE_ID", "STORE_BLR_002")
 DEFAULT_METRIC_DATE = os.getenv("DEFAULT_METRIC_DATE", "2026-04-10")
 
@@ -266,12 +285,32 @@ class CheckoutPerformance:
 
 
 @st.cache_data(ttl=30, show_spinner=False)
-def fetch_json(path: str, params: dict[str, str] | None = None) -> dict[str, Any]:
-    url = f"{API_BASE_URL}{path}"
+def fetch_json(
+    path: str,
+    params: dict[str, str] | None = None,
+    *,
+    base_url: str | None = None,
+) -> dict[str, Any]:
+    root = (base_url or API_BASE_URL).rstrip("/")
+    url = f"{root}{path}"
     with httpx.Client(timeout=15.0) as client:
         response = client.get(url, params=params or {})
         response.raise_for_status()
         return response.json()
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def load_validation_analytics(
+    store_key: str,
+    store_id: str,
+    metric_date_iso: str,
+) -> dict[str, Any]:
+    """Analytics bundle from the selected validation SQLite database (in-process)."""
+    return load_analytics_from_validation_db(
+        store_key,
+        store_id,
+        date.fromisoformat(metric_date_iso),
+    )
 
 
 def fetch_store_ids() -> list[str]:
@@ -1390,6 +1429,7 @@ def render_technical_details(
     heatmap: dict[str, Any],
     anomalies: dict[str, Any],
     business_insights: dict[str, Any] | None = None,
+    staff_analysis: dict[str, Any] | None = None,
 ) -> None:
     st.markdown('<div class="tech-panel-wrap">', unsafe_allow_html=True)
     st.markdown(
@@ -1405,7 +1445,7 @@ def render_technical_details(
         """,
         unsafe_allow_html=True,
     )
-    tab_m, tab_f, tab_hm, tab_a, tab_h, tab_bi = st.tabs(
+    tab_m, tab_f, tab_hm, tab_a, tab_h, tab_bi, tab_staff = st.tabs(
         [
             "Metrics API",
             "Funnel API",
@@ -1413,6 +1453,7 @@ def render_technical_details(
             "Anomalies API",
             "Health API",
             "Business Context",
+            "Staff API",
         ]
     )
     with tab_m:
@@ -1444,6 +1485,12 @@ def render_technical_details(
             st.info(
                 "Business insights were not loaded. Narrative sections use local fallback text."
             )
+    with tab_staff:
+        st.caption("GET /stores/{store_id}/staff-analysis")
+        if staff_analysis:
+            st.json(staff_analysis)
+        else:
+            st.info("Staff analysis was not loaded for this store and date.")
     st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -1459,32 +1506,123 @@ def main() -> None:
     with st.sidebar:
         st.markdown("### Store dashboard")
         st.caption("Daily performance for retail managers")
-        store_ids = fetch_store_ids()
-        idx = store_ids.index(DEFAULT_STORE_ID) if DEFAULT_STORE_ID in store_ids else 0
-        store_id = st.selectbox("Store", store_ids, index=idx)
+
+        store_options = dashboard_store_options()
+        store_labels = [option.label for option in store_options]
+        label_to_option = {option.label: option for option in store_options}
+
+        default_index = 0
         try:
-            default_date = date.fromisoformat(DEFAULT_METRIC_DATE)
-        except ValueError:
-            default_date = datetime.now(timezone.utc).date()
-        selected_date = st.date_input("Trading day", value=default_date)
-        date_param = selected_date.isoformat()
+            default_index = next(
+                i
+                for i, option in enumerate(store_options)
+                if option.store_key == DEFAULT_STORE_KEY
+            )
+        except StopIteration:
+            pass
+
+        selected_label = st.selectbox("Store", store_labels, index=default_index)
+        store_option = label_to_option[selected_label]
+        store_id = store_option.store_id
+        store_key = store_option.store_key
+
+        available_dates = list_event_dates_from_db(
+            store_option.validation_db,
+            store_option.store_id,
+        )
+        if not available_dates:
+            st.error(
+                f"No events in {store_option.validation_db.name}. "
+                f"Run: python scripts/demo_validation_run.py --store {store_key}"
+            )
+            st.stop()
+
+        preferred_default = store_option.default_metric_date
+        if preferred_default not in available_dates:
+            preferred_default = available_dates[-1]
+
+        date_labels = [day.isoformat() for day in available_dates]
+        if (
+            "metric_date_iso" not in st.session_state
+            or st.session_state.metric_date_iso not in date_labels
+            or st.session_state.get("store_key") != store_key
+        ):
+            st.session_state.store_key = store_key
+            st.session_state.metric_date_iso = preferred_default.isoformat()
+
+        date_index = date_labels.index(st.session_state.metric_date_iso)
+        selected_date_iso = st.selectbox("Trading day", date_labels, index=date_index)
+        st.session_state.metric_date_iso = selected_date_iso
+        st.session_state.store_key = store_key
+        selected_date = date.fromisoformat(selected_date_iso)
+        date_param = selected_date_iso
+
+        data_mode = "API" if use_api_client() else "Validation DB"
+        st.caption(f"Data source: {data_mode}")
+        if use_api_client():
+            st.caption(f"API: {api_base_url_for_store(store_key)}")
+            st.caption(
+                "Set the API server DATABASE_URL to match the selected store validation DB."
+            )
+        else:
+            try:
+                bind_validation_database(store_key)
+            except FileNotFoundError as exc:
+                st.error(str(exc))
+                st.stop()
+            st.caption(f"Database: {store_option.validation_db.name}")
+
         if st.button("Refresh", type="primary", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
 
     st.markdown(
         f'<div class="page-header"><h1>Retail Intelligence</h1>'
-        f'<p class="page-meta">{store_id} · {selected_date.strftime("%d %b %Y")}</p></div>',
+        f'<p class="page-meta">{selected_label} · {store_id} · '
+        f'{selected_date.strftime("%d %b %Y")}</p></div>',
         unsafe_allow_html=True,
     )
 
     params = {"date": date_param}
+    staff_analysis: dict[str, Any] | None = None
+    business_insights: dict[str, Any] | None = None
+
     try:
-        health = fetch_json("/health")
-        metrics = fetch_json(f"/stores/{store_id}/metrics", params)
-        funnel = fetch_json(f"/stores/{store_id}/funnel", params)
-        heatmap = fetch_json(f"/stores/{store_id}/heatmap", params)
-        anomalies = fetch_json(f"/stores/{store_id}/anomalies", params)
+        if use_api_client():
+            api_root = api_base_url_for_store(store_key)
+            health = fetch_json("/health", base_url=api_root)
+            metrics = fetch_json(
+                f"/stores/{store_id}/metrics", params, base_url=api_root
+            )
+            funnel = fetch_json(
+                f"/stores/{store_id}/funnel", params, base_url=api_root
+            )
+            heatmap = fetch_json(
+                f"/stores/{store_id}/heatmap", params, base_url=api_root
+            )
+            anomalies = fetch_json(
+                f"/stores/{store_id}/anomalies", params, base_url=api_root
+            )
+            try:
+                staff_analysis = fetch_json(
+                    f"/stores/{store_id}/staff-analysis",
+                    params,
+                    base_url=api_root,
+                )
+            except httpx.HTTPError:
+                staff_analysis = None
+        else:
+            bundle = load_validation_analytics(store_key, store_id, date_param)
+            health = bundle["health"]
+            metrics = bundle["metrics"]
+            funnel = bundle["funnel"]
+            heatmap = bundle["heatmap"]
+            anomalies = bundle["anomalies"]
+            staff_analysis = bundle.get("staff_analysis")
+            business_insights = bundle.get("business_insights")
+    except FileNotFoundError as exc:
+        st.error(str(exc))
+        return
     except httpx.ConnectError:
         st.error(
             "Unable to load store data. Please ensure the store system is running, then refresh."
@@ -1496,16 +1634,23 @@ def main() -> None:
     except httpx.HTTPError:
         st.error("Something went wrong while loading the dashboard. Please refresh.")
         return
+    except Exception as exc:
+        st.error(f"Failed to load analytics: {exc}")
+        return
 
     if not health.get("database_available", False):
         st.error("Store sales records are temporarily unavailable. Please try again shortly.")
         st.stop()
 
-    business_insights: dict[str, Any] | None = None
-    try:
-        business_insights = fetch_json(f"/stores/{store_id}/business-insights", params)
-    except httpx.HTTPError:
-        business_insights = None
+    if use_api_client():
+        try:
+            business_insights = fetch_json(
+                f"/stores/{store_id}/business-insights",
+                params,
+                base_url=api_base_url_for_store(store_key),
+            )
+        except httpx.HTTPError:
+            business_insights = None
 
     unique_visitors = int(metrics.get("unique_visitors", 0))
     total_sessions = int(metrics.get("total_sessions", 0))
@@ -1602,6 +1747,7 @@ def main() -> None:
         heatmap=heatmap,
         anomalies=anomalies,
         business_insights=business_insights,
+        staff_analysis=staff_analysis,
     )
 
 

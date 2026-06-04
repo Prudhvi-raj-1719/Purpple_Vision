@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "camera_key": "CAM5",
+  "enabled": true,
+  "competition_camera_id": "CAM_BILLING_01",
+  "coordinate_system": "normalized",
+  "annotation_canvas": null,
+  "zones": {
+    "BillingQueue": [
+      [0.0016, 0.197],
+      [0.2625, 0.1934],
+      [0.0142, 0.9196],
+      [0.0, 0.7044]
+    ],
+    "PaymentArea": [
+      [0.0763, 0.7326],
+      [0.1089, 0.7273],
+      [0.2531, 0.2871],
+      [0.2267, 0.2871],
+      [0.1594, 0.4869]
+    ]
+  },
+  "zone_priority": ["PaymentArea", "BillingQueue"],
+  "zone_id_map": {
+    "PaymentArea": "BILLING",
+    "BillingQueue": "BILLING"
+  },
+  "overlap": {
+    "min_overlap_pct": 10,
+    "min_zone_stability_frames": 15,
+    "lost_track_frames": 30
+  },
+  "dwell": {
+    "min_dwell_seconds": 2.0,
+    "min_zone_dwell_ms": 30000
+  },
+  "detection": {
+    "confidence_threshold": 0.35,
+    "iou_threshold": 0.5,
+    "process_every_n_frames": 10,
+    "progress_log_every_n_frames": 100
+  }
+}

@@ -8,7 +8,7 @@ from app.ingestion import ingest_event_dicts
 
 def _load_demo_events() -> list[dict]:
     repo_root = Path(__file__).resolve().parents[1]
-    path = repo_root / "data" / "synthetic" / "demo_events.jsonl"
+    path = repo_root / "data" / "synthetic" / "store_1" / "synthetic_events_store_1.jsonl"
     events: list[dict] = []
     with path.open(encoding="utf-8") as handle:
         for line in handle:
@@ -23,10 +23,10 @@ def test_staff_analysis_endpoint_returns_classifications_sorted(client) -> None:
     events = _load_demo_events()
 
     # Ingest in batches (ingestion limit is 500).
-    ingest_1 = ingest_event_dicts(events[:500])
-    ingest_2 = ingest_event_dicts(events[500:])
-    assert ingest_1.rejected == 0
-    assert ingest_2.rejected == 0
+    batch_size = 500
+    for start in range(0, len(events), batch_size):
+        result = ingest_event_dicts(events[start : start + batch_size])
+        assert result.rejected == 0
 
     resp = client.get("/stores/STORE_BLR_002/staff-analysis?date=2026-06-01")
     assert resp.status_code == 200
@@ -57,7 +57,7 @@ def test_staff_analysis_endpoint_returns_classifications_sorted(client) -> None:
 
     # Ensure demo staff visitors are present with evidence and explanatory reasons.
     by_id = {c["visitor_id"]: c for c in classifications}
-    for staff_id in ("VIS_staff001", "VIS_staff002"):
+    for staff_id in ("VIS_staff001", "VIS_staff002", "VIS_staff003"):
         assert staff_id in by_id
         assert by_id[staff_id]["is_staff"] is True
         assert by_id[staff_id]["staff_score"] >= 3

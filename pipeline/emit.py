@@ -20,17 +20,27 @@ logger = logging.getLogger(__name__)
 class EmitStats:
     """Counters for pipeline emission."""
 
-    notbk_received: int = 0
-    purpple_written: int = 0
+    rows_received: int = 0
+    events_written: int = 0
     adaptation_errors: int = 0
+
+    # Backward-compatible aliases (internal pipeline rows → Purpple events).
+    @property
+    def notbk_received(self) -> int:
+        return self.rows_received
+
+    @property
+    def purpple_written(self) -> int:
+        return self.events_written
 
 
 @dataclass
 class PipelineEmitter:
     """
-    Collect NOTEBK-shaped events and persist Purpple_Vision schema JSONL.
+    Accept internal pipeline event rows, adapt to the challenge Event schema, and write JSONL.
 
-    All rows pass through ``event_adapter`` before write.
+    Processors emit lightweight rows (visitor_id, camera, event_type, timestamp, …);
+    this class is the single write path for ``cam*_events.jsonl``.
     """
 
     output_path: Path
@@ -39,26 +49,19 @@ class PipelineEmitter:
     default_confidence: float = 0.85
     stats: EmitStats = field(default_factory=EmitStats)
     _handle: TextIO | None = field(default=None, repr=False)
-    _notbk_handle: TextIO | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
-        self._notbk_path = self.output_path.with_suffix(".notbk.jsonl")
 
     def open(self) -> None:
-        """Open output files (truncates existing)."""
+        """Open output file (truncates existing)."""
         self.output_path.write_text("", encoding="utf-8")
-        self._notbk_path.write_text("", encoding="utf-8")
         self._handle = self.output_path.open("a", encoding="utf-8")
-        self._notbk_handle = self._notbk_path.open("a", encoding="utf-8")
 
     def close(self) -> None:
         if self._handle is not None:
             self._handle.close()
             self._handle = None
-        if self._notbk_handle is not None:
-            self._notbk_handle.close()
-            self._notbk_handle = None
 
     def __enter__(self) -> PipelineEmitter:
         self.open()
@@ -69,13 +72,11 @@ class PipelineEmitter:
 
     def emit_notbk(self, row: dict[str, Any]) -> Event | None:
         """
-        Accept a NOTEBK event dict, optionally mirror raw JSONL, adapt, and write.
+        Adapt an internal pipeline row and append one challenge-schema JSONL line.
 
         Returns the Purpple Event when adaptation succeeds, else None.
         """
-        self.stats.notbk_received += 1
-        if self._notbk_handle is not None:
-            self._notbk_handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+        self.stats.rows_received += 1
 
         camera_key = str(row.get("camera", "CAM5"))
         clip_start = self.clip_start_by_camera.get(camera_key)
@@ -86,6 +87,7 @@ class PipelineEmitter:
                 store_id=self.store_id,
                 clip_start=clip_start,
                 confidence=self.default_confidence,
+                is_staff=False,
             )
         except (ValueError, KeyError, TypeError) as exc:
             self.stats.adaptation_errors += 1
@@ -96,7 +98,7 @@ class PipelineEmitter:
         return event
 
     def emit_adapted_dict(self, row: dict[str, Any]) -> dict[str, Any] | None:
-        """Adapt NOTEBK row to JSON dict without persisting (for tests)."""
+        """Adapt pipeline row to JSON dict without persisting (for tests)."""
         camera_key = str(row.get("camera", "CAM5"))
         clip_start = self.clip_start_by_camera.get(camera_key)
         try:
@@ -105,6 +107,7 @@ class PipelineEmitter:
                 store_id=self.store_id,
                 clip_start=clip_start,
                 confidence=self.default_confidence,
+                is_staff=False,
             )
         except (ValueError, KeyError, TypeError) as exc:
             logger.warning("Event adaptation failed: %s", exc)
@@ -115,11 +118,8 @@ class PipelineEmitter:
             raise RuntimeError("PipelineEmitter is not open; call open() first")
         payload = event.model_dump(mode="json")
         self._handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
-        self.stats.purpple_written += 1
-
-    @property
-    def notbk_mirror_path(self) -> Path:
-        return self._notbk_path
+        self._handle.flush()
+        self.stats.events_written += 1
 
 
 def write_events_jsonl(
@@ -129,7 +129,7 @@ def write_events_jsonl(
     store_id: str,
     clip_start_by_camera: dict[str, datetime] | None = None,
 ) -> EmitStats:
-    """Batch-write NOTEBK rows to Purpple JSONL via the adapter."""
+    """Batch-write pipeline rows to challenge-schema JSONL via the adapter."""
     with PipelineEmitter(
         output_path=output_path,
         store_id=store_id,

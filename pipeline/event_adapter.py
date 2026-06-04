@@ -101,7 +101,12 @@ def resolve_utc_timestamp(
 
 
 def map_visitor_id(raw_visitor_id: Any) -> str:
-    """Map NOTEBK numeric track id to VIS_* challenge pattern."""
+    """
+    Map a pipeline track or Re-ID token to challenge ``visitor_id`` (``^VIS_[a-z0-9]+$``).
+
+    - Re-ID cameras: pass through ``VIS_*`` from OSNet session matching.
+    - Non-Re-ID cameras: derive ``VIS_{byte_track_id}`` from ByteTrack id (never null).
+    """
     if isinstance(raw_visitor_id, str) and raw_visitor_id.startswith("VIS_"):
         return raw_visitor_id
     return f"VIS_{int(raw_visitor_id)}"
@@ -201,3 +206,37 @@ def notbk_event_to_json_dict(
     """Serialize adapted event for JSONL (JSON-compatible dict)."""
     event = notbk_event_to_event(row, **kwargs)
     return event.model_dump(mode="json")
+
+
+def coerce_matching_event_row(row: dict[str, Any]) -> dict[str, Any]:
+    """
+    Normalize challenge-schema JSONL rows for offline purchase matching.
+
+    Purchase matching was written for internal pipeline type names; this maps
+    Purpple ``event_type`` / ``metadata.sku_zone`` back to those names.
+    """
+    if "event_id" not in row:
+        return row
+
+    out = dict(row)
+    meta = row.get("metadata") or {}
+    sku_zone = meta.get("sku_zone")
+    if sku_zone:
+        out["zone"] = sku_zone
+
+    event_type = str(row.get("event_type", ""))
+    purpple_to_internal = {
+        "BILLING_QUEUE_JOIN": "QUEUE_ENTER",
+        "BILLING_QUEUE_ABANDON": "QUEUE_EXIT",
+        "ZONE_DWELL": "DWELL_COMPLETED",
+    }
+    if event_type in purpple_to_internal:
+        out["event_type"] = purpple_to_internal[event_type]
+    elif event_type == "ZONE_ENTER" and str(sku_zone) == "PaymentArea":
+        out["event_type"] = "PAYMENT_ENTER"
+        out["zone"] = "PaymentArea"
+    elif event_type == "ZONE_EXIT" and str(sku_zone) == "PaymentArea":
+        out["event_type"] = "PAYMENT_EXIT"
+        out["zone"] = "PaymentArea"
+
+    return out

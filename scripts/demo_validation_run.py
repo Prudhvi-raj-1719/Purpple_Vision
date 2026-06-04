@@ -1,15 +1,23 @@
 """
-Synthetic end-to-end validation using an isolated SQLite database.
+Synthetic end-to-end validation using per-store isolated SQLite databases.
 
-Uses data/synthetic/demo_events.jsonl and data/synthetic/demo_pos.csv only.
-Does NOT touch data/databases/store_intelligence.db (production).
+Uses:
+  data/synthetic/store_1/synthetic_events_store_1.jsonl
+  data/synthetic/store_1/synthetic_pos_store_1.csv
+  data/synthetic/store_2/synthetic_events_store_2.jsonl
+  data/synthetic/store_2/synthetic_pos_store_2.csv
+
+Does NOT touch store_intelligence.db or cross-contaminate store DBs.
 
 Usage:
     python scripts/demo_validation_run.py
+    python scripts/demo_validation_run.py --store store_1
+    python scripts/demo_validation_run.py --store all
 """
 
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 import sys
@@ -18,51 +26,33 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SYNTHETIC_DIR = REPO_ROOT / "data" / "synthetic"
-EVENTS_PATH = SYNTHETIC_DIR / "demo_events.jsonl"
-POS_PATH = SYNTHETIC_DIR / "demo_pos.csv"
-
-STORE_ID = "STORE_BLR_002"
-METRIC_DATE = date(2026, 6, 1)
-INGEST_BATCH_SIZE = 500
-
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.demo_cleanup import (  # noqa: E402 — before app.db
-    DEMO_VALIDATION_DB,
-    DEMO_VALIDATION_REPORT_PATHS,
+from scripts.demo_cleanup import (  # noqa: E402
     assert_demo_database_path,
     clean_report_files,
     delete_sqlite_database,
     force_database_url,
     resolve_engine_database_path,
 )
-
-force_database_url(DEMO_VALIDATION_DB)
-delete_sqlite_database(DEMO_VALIDATION_DB)
-
-from app.anomalies import compute_store_anomalies  # noqa: E402
-from app.db import (  # noqa: E402
-    EventRecord,
-    PosTransactionRecord,
-    fetch_store_events,
-    fetch_store_pos_transactions,
-    get_session,
-    init_db,
+from scripts.synthetic_paths import (  # noqa: E402
+    SUPPORTED_SYNTHETIC_STORES,
+    SyntheticStoreSpec,
+    all_synthetic_store_specs,
+    synthetic_store_spec,
 )
-from app.funnel import compute_store_funnel  # noqa: E402
-from app.heatmap import compute_store_heatmap  # noqa: E402
-from app.ingestion import ingest_event_dicts  # noqa: E402
-from app.metrics import compute_store_metrics  # noqa: E402
-from app.models import PosTransaction  # noqa: E402
-from app.pos_correlation import converted_visitor_ids  # noqa: E402
-from app.pos_ingestion import ingest_pos_transaction_dicts  # noqa: E402
-from app.sessions import build_sessions, count_unique_visitors, customer_sessions  # noqa: E402
+
+INGEST_BATCH_SIZE = 500
 
 
 @dataclass
 class ValidationSummary:
+    store_key: str
+    store_id: str
+    metric_date: date
+    events_path: Path
+    pos_path: Path
     events_loaded: int = 0
     events_ingested: int = 0
     events_duplicates: int = 0
@@ -75,6 +65,7 @@ class ValidationSummary:
     sessions_customer: int = 0
     unique_visitors: int = 0
     converted_visitors: int = 0
+    reentry_event_count: int = 0
     revenue_inr: float = 0.0
     metrics: dict = field(default_factory=dict)
     funnel_stages: list[dict] = field(default_factory=list)
@@ -108,6 +99,8 @@ def load_events(path: Path) -> list[dict]:
 
 
 def load_pos_rows(path: Path) -> list[dict]:
+    from app.models import PosTransaction
+
     rows: list[dict] = []
     with path.open(encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
@@ -122,23 +115,25 @@ def load_pos_rows(path: Path) -> list[dict]:
     return rows
 
 
-def reset_validation_database() -> Path:
-    """Recreate validation DB schema from scratch (files removed at import)."""
-    from app.db import engine
+def reset_validation_database(db_path: Path, *, label: str) -> Path:
+    """Recreate validation DB schema; rebind SQLAlchemy engine to an isolated file."""
+    import importlib
 
-    DEMO_VALIDATION_DB.parent.mkdir(parents=True, exist_ok=True)
-    init_db()
-    database_used = assert_demo_database_path(
-        engine,
-        expected=DEMO_VALIDATION_DB,
-        label="demo_validation_run",
-    )
-    print("[INFO] Validation DB reset")
-    return database_used
+    force_database_url(db_path)
+    delete_sqlite_database(db_path)
+
+    import app.db as db_module
+
+    importlib.reload(db_module)
+
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    db_module.init_db()
+    return assert_demo_database_path(db_module.engine, expected=db_path, label=label)
 
 
 def ingest_events_in_batches(events: list[dict]) -> tuple[int, int, int, list[str]]:
-    """Ingest events in API-sized chunks (max 500 per request)."""
+    from app.ingestion import ingest_event_dicts
+
     ingested = 0
     duplicates = 0
     rejected = 0
@@ -154,43 +149,66 @@ def ingest_events_in_batches(events: list[dict]) -> tuple[int, int, int, list[st
     return ingested, duplicates, rejected, errors
 
 
-def run_validation() -> ValidationSummary:
-    summary = ValidationSummary()
+def run_validation_for_store(spec: SyntheticStoreSpec) -> ValidationSummary:
+    import importlib
 
-    if not EVENTS_PATH.is_file():
-        summary.errors.append(f"Missing events file: {EVENTS_PATH}")
+    import app.db as db_module
+
+    database_used = reset_validation_database(
+        spec.validation_db,
+        label=f"demo_validation_run:{spec.store_key}",
+    )
+    print(f"[INFO] {spec.store_key} validation DB reset: {database_used}")
+
+    importlib.reload(db_module)
+    from app.anomalies import compute_store_anomalies
+    from app.db import fetch_store_events, fetch_store_pos_transactions, get_session
+    from app.funnel import compute_store_funnel
+    from app.heatmap import compute_store_heatmap
+    from app.metrics import compute_store_metrics
+    from app.pos_correlation import converted_visitor_ids
+    from app.pos_ingestion import ingest_pos_transaction_dicts
+    from app.sessions import build_sessions, count_unique_visitors, customer_sessions
+
+    summary = ValidationSummary(
+        store_key=spec.store_key,
+        store_id=spec.store_id,
+        metric_date=spec.metric_date,
+        events_path=spec.events_path,
+        pos_path=spec.pos_path,
+    )
+
+    if not spec.events_path.is_file():
+        summary.errors.append(f"Missing events file: {spec.events_path}")
         return summary
-    if not POS_PATH.is_file():
-        summary.errors.append(f"Missing POS file: {POS_PATH}")
+    if not spec.pos_path.is_file():
+        summary.errors.append(f"Missing POS file: {spec.pos_path}")
         return summary
 
-    reset_validation_database()
-
-    events = load_events(EVENTS_PATH)
+    events = load_events(spec.events_path)
     summary.events_loaded = len(events)
+    summary.reentry_event_count = sum(
+        1 for e in events if e.get("event_type") == "REENTRY"
+    )
     ingested, duplicates, rejected, ingest_errors = ingest_events_in_batches(events)
     summary.events_ingested = ingested
     summary.events_duplicates = duplicates
     summary.events_rejected = rejected
     summary.errors.extend(ingest_errors)
 
-    pos_rows = load_pos_rows(POS_PATH)
+    pos_rows = load_pos_rows(spec.pos_path)
     summary.pos_loaded = len(pos_rows)
     pos_status = ingest_pos_transaction_dicts(pos_rows)
     summary.pos_ingested = pos_status.transactions_ingested
     summary.pos_duplicates = pos_status.duplicates_skipped
     summary.pos_rejected = pos_status.rejected
     if pos_status.errors:
-        summary.errors.extend(
-            f"pos[{e.index}]: {e.error}" for e in pos_status.errors
-        )
+        summary.errors.extend(f"pos[{e.index}]: {e.error}" for e in pos_status.errors)
 
     with get_session() as session:
-        event_records: list[EventRecord] = fetch_store_events(
-            session, STORE_ID, day=METRIC_DATE
-        )
-        pos_records: list[PosTransactionRecord] = fetch_store_pos_transactions(
-            session, STORE_ID, day=METRIC_DATE
+        event_records = fetch_store_events(session, spec.store_id, day=spec.metric_date)
+        pos_records = fetch_store_pos_transactions(
+            session, spec.store_id, day=spec.metric_date
         )
 
     sessions = build_sessions(event_records)
@@ -199,46 +217,49 @@ def run_validation() -> ValidationSummary:
     summary.sessions_customer = len(customers)
     summary.unique_visitors = count_unique_visitors(sessions)
     summary.converted_visitors = len(converted_visitor_ids(sessions, pos_records))
-    summary.revenue_inr = round(
-        sum(txn.basket_value_inr for txn in pos_records), 2
-    )
+    summary.revenue_inr = round(sum(txn.basket_value_inr for txn in pos_records), 2)
 
-    metrics = compute_store_metrics(STORE_ID, METRIC_DATE, event_records, pos_records)
+    metrics = compute_store_metrics(
+        spec.store_id, spec.metric_date, event_records, pos_records
+    )
     summary.metrics = metrics.model_dump(mode="json")
 
-    funnel = compute_store_funnel(STORE_ID, METRIC_DATE, event_records, pos_records)
-    summary.funnel_stages = [
-        stage.model_dump(mode="json") for stage in funnel.stages
-    ]
+    funnel = compute_store_funnel(
+        spec.store_id, spec.metric_date, event_records, pos_records
+    )
+    summary.funnel_stages = [stage.model_dump(mode="json") for stage in funnel.stages]
 
-    heatmap = compute_store_heatmap(STORE_ID, METRIC_DATE, event_records)
+    heatmap = compute_store_heatmap(spec.store_id, spec.metric_date, event_records)
     summary.heatmap_zones = len(heatmap.zones)
 
-    anomalies = compute_store_anomalies(STORE_ID, METRIC_DATE, event_records, pos_records)
+    anomalies = compute_store_anomalies(
+        spec.store_id, spec.metric_date, event_records, pos_records
+    )
     summary.anomalies_count = len(anomalies.anomalies)
 
     return summary
 
 
-def write_report(summary: ValidationSummary, *, database_used: Path) -> None:
+def write_report(summary: ValidationSummary, *, database_path: Path) -> None:
+    spec = synthetic_store_spec(summary.store_key)
     lines: list[str] = [
-        "# Demo Validation Report",
+        f"# Demo Validation Report — {summary.store_key}",
         "",
         "**Purpose:** Synthetic ENTRY-based dataset to verify sessions, funnel, metrics, and analytics.",
         "",
-        f"**Store:** `{STORE_ID}`  ",
-        f"**Metric date (UTC):** `{METRIC_DATE.isoformat()}`  ",
+        f"**Store key:** `{summary.store_key}`  ",
+        f"**Store ID:** `{summary.store_id}`  ",
+        f"**Metric date (UTC):** `{summary.metric_date.isoformat()}`  ",
         "",
-        "**Clean run:**",
-        "YES",
+        "**Clean run:** YES",
         "",
         "**Database actually used:**",
-        f"`{database_used}`",
+        f"`{database_path}`",
         "",
-        f"**Events file:** `{EVENTS_PATH.relative_to(REPO_ROOT)}`  ",
-        f"**POS file:** `{POS_PATH.relative_to(REPO_ROOT)}`  ",
+        f"**Events file:** `{summary.events_path.relative_to(REPO_ROOT)}`  ",
+        f"**POS file:** `{summary.pos_path.relative_to(REPO_ROOT)}`  ",
         "",
-        "> Production database (`data/databases/store_intelligence.db`) is **not modified**.",
+        "> Other store validation DBs are **not modified** by this run.",
         "",
         "## 1. Ingestion",
         "",
@@ -255,17 +276,10 @@ def write_report(summary: ValidationSummary, *, database_used: Path) -> None:
         "",
         "## 2. Sessions",
         "",
-        f"- Sessions created: **{summary.sessions_customer}** (customer sessions)",
-        f"- Total sessions (incl. logic): **{summary.sessions_total}**",
+        f"- Customer sessions: **{summary.sessions_customer}**",
+        f"- Total sessions: **{summary.sessions_total}**",
         f"- Unique visitors: **{summary.unique_visitors}**",
-        "",
-        "### Visitor journeys",
-        "",
-        "| Visitor | Journey | Converted |",
-        "|---------|---------|-----------|",
-        "| VIS_101 | ENTRY → LAKME → dwell → billing queue → EXIT | Yes (TXN_DEMO_101) |",
-        "| VIS_102 | ENTRY → PILGRIM → dwell → EXIT | No |",
-        "| VIS_103 | ENTRY → GOODVIBES → dwell → billing queue → EXIT | Yes (TXN_DEMO_103) |",
+        f"- REENTRY events in fixture: **{summary.reentry_event_count}**",
         "",
         "## 3. Metrics",
         "",
@@ -276,7 +290,6 @@ def write_report(summary: ValidationSummary, *, database_used: Path) -> None:
         f"| conversion_rate | {summary.metrics.get('conversion_rate', 0.0):.4f} |",
         f"| billing_reach_rate | {summary.metrics.get('billing_reach_rate', 0.0):.4f} |",
         f"| queue_abandonment_rate | {summary.metrics.get('queue_abandonment_rate', 0.0):.4f} |",
-        f"| current_queue_depth | {summary.metrics.get('current_queue_depth', 0)} |",
         "",
         "## 4. Funnel",
         "",
@@ -295,36 +308,15 @@ def write_report(summary: ValidationSummary, *, database_used: Path) -> None:
         [
             "",
             f"- Converted visitors: **{summary.converted_visitors}**",
+            f"- Revenue (INR): **{summary.revenue_inr:,.2f}**",
+            f"- Anomalies: **{summary.anomalies_count}**",
             "",
-            "## 5. Conversions & revenue",
-            "",
-            "| Metric | Value |",
-            "|--------|-------|",
-            f"| Converted visitors (POS correlation) | {summary.converted_visitors} |",
-            f"| Total POS revenue (INR) | {summary.revenue_inr:,.2f} |",
-            "",
-            "POS transactions:",
-            "",
-            "| transaction_id | visitor | amount (INR) |",
-            "|----------------|---------|--------------|",
-            "| TXN_DEMO_101 | VIS_101 | 849.50 |",
-            "| TXN_DEMO_103 | VIS_103 | 1,299.00 |",
-            "",
-            "## 6. Heatmap & anomalies",
-            "",
-            f"- Heatmap zones reported: **{summary.heatmap_zones}**",
-            f"- Anomalies detected: **{summary.anomalies_count}**",
-            "",
-            "## 7. Dashboard verification",
-            "",
-            "To view non-zero analytics in Streamlit against the validation DB:",
+            "## 5. Dashboard verification",
             "",
             "```powershell",
-            f'$env:DATABASE_URL = "sqlite:///{DEMO_VALIDATION_DB.resolve().as_posix()}"',
+            f'$env:DATABASE_URL = "sqlite:///{spec.validation_db.resolve().as_posix()}"',
+            f'$env:DEFAULT_METRIC_DATE = "{summary.metric_date.isoformat()}"',
             "uvicorn app.main:app --host 0.0.0.0 --port 8000",
-            "# second terminal:",
-            '$env:API_BASE_URL = "http://localhost:8000"',
-            f'$env:DEFAULT_METRIC_DATE = "{METRIC_DATE.isoformat()}"',
             "streamlit run dashboard/streamlit_app.py --server.port 8501",
             "```",
             "",
@@ -333,60 +325,80 @@ def write_report(summary: ValidationSummary, *, database_used: Path) -> None:
 
     if summary.errors:
         lines.extend(["## Errors", ""])
-        for err in summary.errors:
-            lines.append(f"- {err}")
+        lines.extend(f"- {err}" for err in summary.errors)
         lines.append("")
 
+    passed = (
+        summary.events_rejected == 0
+        and summary.sessions_customer >= 100
+        and summary.unique_visitors >= 100
+        and summary.reentry_event_count >= 20
+        and float(summary.metrics.get("conversion_rate", 0.0)) >= 0.60
+    )
     lines.append(
         "## Verdict\n\n"
         + (
-            "**PASS** — Sessions and funnel populated from synthetic ENTRY events."
-            if summary.sessions_customer >= 3 and summary.unique_visitors >= 3
-            else "**FAIL** — See errors or session counts above."
+            "**PASS** — Per-store synthetic validation succeeded."
+            if passed
+            else "**FAIL** — See counts/errors above."
         )
     )
 
     body = "\n".join(lines) + "\n"
-    for report_path in DEMO_VALIDATION_REPORT_PATHS:
+    clean_report_files(spec.report_paths)
+    for report_path in spec.report_paths:
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(body, encoding="utf-8")
 
 
-def main() -> int:
-    print(f"Events: {EVENTS_PATH}")
-    print(f"POS: {POS_PATH}")
-
-    summary = run_validation()
-    from app.db import engine
-
-    database_used = resolve_engine_database_path(engine)
-    assert_demo_database_path(
-        engine,
-        expected=DEMO_VALIDATION_DB,
-        label="demo_validation_run",
-    )
-    print(f"Validation DB: {database_used}")
-
-    clean_report_files(DEMO_VALIDATION_REPORT_PATHS)
-    write_report(summary, database_used=database_used)
-
-    print(f"\nEvents ingested : {summary.events_ingested}/{summary.events_loaded}")
+def print_summary(summary: ValidationSummary, *, database_path: Path) -> None:
+    print(f"\n=== {summary.store_key} ===")
+    print(f"Validation DB: {database_path}")
+    print(f"Events ingested : {summary.events_ingested}/{summary.events_loaded}")
     print(f"POS ingested    : {summary.pos_ingested}/{summary.pos_loaded}")
     print(f"Sessions        : {summary.sessions_customer}")
     print(f"Unique visitors : {summary.unique_visitors}")
+    print(f"REENTRY events  : {summary.reentry_event_count}")
     print(f"Converted       : {summary.converted_visitors}")
     print(f"Conversion rate : {summary.metrics.get('conversion_rate', 0.0):.2%}")
+    print(f"Queue abandon   : {summary.metrics.get('queue_abandonment_rate', 0.0):.2%}")
     print(f"Revenue (INR)   : {summary.revenue_inr:,.2f}")
-    print(f"Report          : {DEMO_VALIDATION_REPORT_PATHS[0]}")
 
-    if summary.errors:
-        print("\nErrors:")
-        for err in summary.errors:
-            print(f"  - {err}")
-        return 1
-    if summary.sessions_customer < 3:
-        return 1
-    return 0
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Run synthetic validation per store")
+    parser.add_argument(
+        "--store",
+        choices=[*SUPPORTED_SYNTHETIC_STORES, "all"],
+        default="all",
+    )
+    args = parser.parse_args()
+
+    specs = (
+        all_synthetic_store_specs()
+        if args.store == "all"
+        else (synthetic_store_spec(args.store),)
+    )
+
+    exit_code = 0
+    for spec in specs:
+        print(f"Events: {spec.events_path}")
+        print(f"POS: {spec.pos_path}")
+        summary = run_validation_for_store(spec)
+        from app.db import engine
+
+        database_used = resolve_engine_database_path(engine)
+        assert_demo_database_path(
+            engine,
+            expected=spec.validation_db,
+            label=f"demo_validation_run:{spec.store_key}",
+        )
+        write_report(summary, database_path=database_used)
+        print_summary(summary, database_path=database_used)
+        print(f"Report: {spec.report_paths[0]}")
+        if summary.errors or summary.sessions_customer < 100:
+            exit_code = 1
+    return exit_code
 
 
 if __name__ == "__main__":

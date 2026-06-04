@@ -13,14 +13,8 @@ from pathlib import Path
 
 import cv2
 
-from pipeline.config import (
-    CAMERA_VIDEO_FILES,
-    DEFAULT_STORE_ID,
-    OUTPUT_DIR,
-    PROCESS_EVERY_N_FRAMES,
-    PROGRESS_LOG_EVERY_N_FRAMES,
-    parse_clip_start,
-)
+from pipeline.config import parse_clip_start, refresh_store_config
+from pipeline.store_config import StoreConfig, resolve_store_config
 from pipeline.detect import detect_persons, load_yolo_model
 from pipeline.emit import PipelineEmitter
 from pipeline.tracker import create_byte_tracker, update_tracks
@@ -49,6 +43,7 @@ def process_cam4_video(
     *,
     emitter: PipelineEmitter | None = None,
     show_window: bool = False,
+    store: StoreConfig | None = None,
 ) -> Cam4RobustnessStats:
     """
     Process CAM4 footage: detect and track persons only.
@@ -58,7 +53,18 @@ def process_cam4_video(
     """
     del emitter  # orchestrators pass emitter; CAM4 does not emit events
 
-    path = video_path or CAMERA_VIDEO_FILES[CAMERA_KEY]
+    cfg = resolve_store_config(store)
+    if not cfg.cam4.enabled:
+        raise RuntimeError(
+            f"{cfg.store_key}: CAM4 is not configured (missing cam4.json or enabled=false)"
+        )
+
+    path = video_path or cfg.videos.video_path(CAMERA_KEY)
+    if path is None:
+        raise FileNotFoundError(f"{cfg.store_key}: no CAM4 video configured")
+
+    process_every_n = cfg.cam4.detection.process_every_n_frames
+    progress_every_n = cfg.cam4.detection.progress_log_every_n_frames
     capture = cv2.VideoCapture(str(path))
     if not capture.isOpened():
         raise FileNotFoundError(f"Unable to open video: {path}")
@@ -75,7 +81,7 @@ def process_cam4_video(
         video_height,
         fps,
         total_frames,
-        PROCESS_EVERY_N_FRAMES,
+        process_every_n,
     )
 
     yolo_model = load_yolo_model()
@@ -99,9 +105,9 @@ def process_cam4_video(
             if not success or frame is None:
                 break
 
-            if original_frame % PROCESS_EVERY_N_FRAMES != 0:
+            if original_frame % process_every_n != 0:
                 original_frame += 1
-                if original_frame % PROGRESS_LOG_EVERY_N_FRAMES == 0:
+                if original_frame % progress_every_n == 0:
                     pct = 100.0 * original_frame / total_frames if total_frames > 0 else 0.0
                     logger.info(
                         "[PROGRESS] %s frame=%s processed=%s (%.1f%%) "
@@ -139,7 +145,7 @@ def process_cam4_video(
 
             del frame, detections
             original_frame += 1
-            if original_frame % PROGRESS_LOG_EVERY_N_FRAMES == 0:
+            if original_frame % progress_every_n == 0:
                 pct = 100.0 * original_frame / total_frames if total_frames > 0 else 0.0
                 logger.info(
                     "[PROGRESS] %s frame=%s processed=%s (%.1f%%) "
@@ -172,20 +178,23 @@ def run_cli(
     output_path: Path | None = None,
     *,
     show_window: bool = False,
+    store: StoreConfig | None = None,
 ) -> Cam4RobustnessStats:
     """CLI: scan CAM4 and write empty JSONL files via PipelineEmitter."""
-    out = output_path or (OUTPUT_DIR / "pipeline" / "pipeline_demo" / "cam4_events.jsonl")
-    clip_start = parse_clip_start(CAMERA_KEY)
+    cfg = resolve_store_config(store)
+    refresh_store_config(cfg.store_key)
+    out = output_path or (cfg.pipeline_output_dir / "cam4_events.jsonl")
+    clip_start = parse_clip_start(CAMERA_KEY, store=cfg)
     with PipelineEmitter(
         output_path=out,
-        store_id=DEFAULT_STORE_ID,
+        store_id=cfg.store_id,
         clip_start_by_camera={CAMERA_KEY: clip_start},
     ) as emitter:
-        stats = process_cam4_video(emitter=emitter, show_window=show_window)
+        stats = process_cam4_video(emitter=emitter, show_window=show_window, store=cfg)
         logger.info(
             "CAM4 persons_detected=%s events_written=%s",
             stats.persons_detected,
-            emitter.stats.purpple_written,
+            emitter.stats.events_written,
         )
         return stats
 

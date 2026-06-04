@@ -30,6 +30,9 @@ lapx==0.5.11                       # ByteTrack assignment (Windows-compatible la
 
 # Transitive via ultralytics (not pinned): torch, torchvision, scipy, matplotlib, pyyaml, etc.
 
+# --- CAM3 Re-ID (store_2 / Footage2; optional) ---
+# pip install -r requirements-reid.txt
+
 # --- Data processing ---
 pandas==2.2.3             # POS CSV aggregation (pos_loader); Streamlit charts
 

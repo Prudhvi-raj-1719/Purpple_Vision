@@ -18,8 +18,8 @@ if str(REPO_ROOT) not in sys.path:
 STORE = "STORE_BLR_002"
 DAY = date(2026, 6, 1)
 INGEST_BATCH_SIZE = 500
-EVENTS_PATH = REPO_ROOT / "data" / "synthetic" / "demo_events.jsonl"
-POS_PATH = REPO_ROOT / "data" / "synthetic" / "demo_pos.csv"
+EVENTS_PATH = REPO_ROOT / "data" / "synthetic" / "store_1" / "synthetic_events_store_1.jsonl"
+POS_PATH = REPO_ROOT / "data" / "synthetic" / "store_1" / "synthetic_pos_store_1.csv"
 
 
 def _setup_db() -> None:

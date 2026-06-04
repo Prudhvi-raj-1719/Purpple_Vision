@@ -5,15 +5,14 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from pipeline.config import (
-    CAM2_ZONES,
-    CAMERA_VIDEO_FILES,
-    DEFAULT_STORE_ID,
-    OUTPUT_DIR,
-    parse_clip_start,
-)
+from pipeline.config import parse_clip_start, refresh_store_config
 from pipeline.dwell import ZoneEngagementStats, process_zone_engagement_video
 from pipeline.emit import PipelineEmitter
+from pipeline.store_config import (
+    StoreConfig,
+    resolve_store_config,
+    zones_as_legacy_dict,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -25,16 +24,25 @@ def process_cam2_video(
     *,
     emitter: PipelineEmitter | None = None,
     show_window: bool = False,
+    store: StoreConfig | None = None,
 ) -> ZoneEngagementStats:
     """Process CAM2 footage and emit ZONE_ENTER / ZONE_EXIT / DWELL_COMPLETED."""
-    path = video_path or CAMERA_VIDEO_FILES[CAMERA_KEY]
+    cfg = resolve_store_config(store)
+    if not cfg.cam2.enabled:
+        raise RuntimeError(f"{cfg.store_key}: CAM2 is disabled in cam2.json")
+
+    path = video_path or cfg.videos.video_path(CAMERA_KEY)
+    if path is None:
+        raise FileNotFoundError(f"{cfg.store_key}: no CAM2 video configured")
+
     return process_zone_engagement_video(
         camera_key=CAMERA_KEY,
-        zone_definitions=CAM2_ZONES,
+        zone_definitions=zones_as_legacy_dict(cfg.cam2.zones),
         video_path=path,
         emitter=emitter,
         show_window=show_window,
-        window_title="CAM2 Zone Engagement",
+        window_title=f"{cfg.display_name} CAM2 Zone Engagement",
+        process_every_n=cfg.cam2.detection.process_every_n_frames,
     )
 
 
@@ -42,20 +50,22 @@ def run_cli(
     output_path: Path | None = None,
     *,
     show_window: bool = False,
+    store: StoreConfig | None = None,
 ) -> None:
     """CLI: process CAM2 and write Purpple-schema JSONL via event_adapter."""
-    out = output_path or (OUTPUT_DIR / "cam2_events.jsonl")
-    clip_start = parse_clip_start(CAMERA_KEY)
+    cfg = resolve_store_config(store)
+    refresh_store_config(cfg.store_key)
+    out = output_path or (cfg.pipeline_output_dir / "cam2_events.jsonl")
+    clip_start = parse_clip_start(CAMERA_KEY, store=cfg)
     with PipelineEmitter(
         output_path=out,
-        store_id=DEFAULT_STORE_ID,
+        store_id=cfg.store_id,
         clip_start_by_camera={CAMERA_KEY: clip_start},
     ) as emitter:
-        process_cam2_video(emitter=emitter, show_window=show_window)
+        process_cam2_video(emitter=emitter, show_window=show_window, store=cfg)
         logger.info(
-            "Wrote %s Purpple events (%s NOTEBK rows, %s adaptation errors)",
-            emitter.stats.purpple_written,
-            emitter.stats.notbk_received,
+            "Wrote %s events (%s adaptation errors)",
+            emitter.stats.events_written,
             emitter.stats.adaptation_errors,
         )
 

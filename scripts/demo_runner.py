@@ -4,16 +4,16 @@ One-command demo runner for the complete Store Intelligence workflow.
 Goal: orchestrate existing modules end-to-end without changing business logic.
 
 Pipeline:
-  0) Force demo_product.db, delete prior DB + schema, clean pipeline_demo outputs
+  0) Reset active store intelligence DB (store_N_intelligence.db), clean pipeline outputs
   1) CAM1 processor
   2) CAM2 processor
-  3) CAM3 processor (entry/exit)
+  3) CAM3 processor (retail entry/exit via cam3_processor)
   4) CAM4 processor (robustness — detection only, no events)
-  5) CAM5 processor (billing queue)
+  5) CAM5 processor (billing queue via cam5_processor)
   5) POS loader (aggregate Brigade CSV -> Purpple POS CSV)
   6) Purchase matching (offline)
-  7) Bridge pipeline outputs -> product DB (ingest + analytics compute)
-  8) Synthetic analytics validation (demo_validation.db subprocess)
+  7) Bridge pipeline outputs -> store intelligence DB (ingest + analytics compute)
+  8) Synthetic analytics validation (store_1 + store_2 validation DBs subprocess)
 
 Outputs:
   - demo_run_report.md (repo root)
@@ -32,7 +32,7 @@ import sys
 import time
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -43,20 +43,17 @@ if str(REPO_ROOT) not in sys.path:
 from scripts.demo_cleanup import (  # noqa: E402 — before app.db
     AGGREGATED_TRANSACTIONS_CSV,
     AGGREGATED_TRANSACTIONS_JSON,
-    DEMO_PRODUCT_DB,
     DEMO_RUN_REPORT_PATHS,
     assert_demo_database_path,
     clean_directory_files,
+    clean_notbk_mirror_files,
     clean_report_files,
     delete_file_if_exists,
-    delete_sqlite_database,
+    delete_sqlite_database_for_cctv_run,
     force_database_url,
+    intelligence_database_path,
     resolve_engine_database_path,
 )
-
-# Force isolated demo DB before any module imports app.db.
-force_database_url(DEMO_PRODUCT_DB)
-delete_sqlite_database(DEMO_PRODUCT_DB)
 
 from pipeline.cam1_processor import CAMERA_KEY as CAM1_KEY, process_cam1_video  # noqa: E402
 from pipeline.cam2_processor import CAMERA_KEY as CAM2_KEY, process_cam2_video  # noqa: E402
@@ -67,11 +64,12 @@ from pipeline.config import (  # noqa: E402
     PIPELINE_DEMO_DIR,
     PURCHASE_MATCHES_JSON,
     PURPPLE_POS_CSV,
-    parse_clip_start,
+    emitter_clip_start_by_camera,
+    get_active_store,
 )
 from pipeline.emit import EmitStats, PipelineEmitter  # noqa: E402
-from pipeline.entry_exit import CAMERA_KEY as CAM3_KEY, process_cam3_video  # noqa: E402
-from pipeline.queue import CAMERA_KEY as CAM5_KEY, process_cam5_video  # noqa: E402
+from pipeline.cam3_processor import CAMERA_KEY as CAM3_KEY, process_cam3_video  # noqa: E402
+from pipeline.cam5_processor import CAMERA_KEY as CAM5_KEY, process_cam5_video  # noqa: E402
 from pipeline.pos_loader import AggregationSummary, run_cli as run_pos_loader  # noqa: E402
 from pipeline.purchase_matching import MatchingStats, run_cli as run_purchase_matching  # noqa: E402
 
@@ -89,21 +87,32 @@ class SyntheticValidationRun:
     stdout: str = ""
 
 
-def _init_demo_database() -> Path:
-    """Create empty schema on demo_product.db; return verified filesystem path."""
-    from app.db import engine, init_db
+def _init_intelligence_database(*, store_key: str, intelligence_db: Path) -> Path:
+    """Reset schema on the active store intelligence DB; return verified path."""
+    import importlib
 
-    DEMO_PRODUCT_DB.parent.mkdir(parents=True, exist_ok=True)
-    init_db()
+    force_database_url(intelligence_db)
+    delete_sqlite_database_for_cctv_run(
+        intelligence_db,
+        active_store_key=store_key,
+    )
+
+    import app.db as db_module
+
+    importlib.reload(db_module)
+
+    intelligence_db.parent.mkdir(parents=True, exist_ok=True)
+    db_module.init_db()
     return assert_demo_database_path(
-        engine,
-        expected=DEMO_PRODUCT_DB,
+        db_module.engine,
+        expected=intelligence_db,
         label="demo_runner",
     )
 
 
 def _clean_pipeline_outputs() -> None:
     clean_directory_files(PIPELINE_DEMO_DIR)
+    clean_notbk_mirror_files(PIPELINE_DEMO_DIR)
     print("[INFO] Pipeline outputs cleaned")
 
 
@@ -117,6 +126,23 @@ def _clean_pos_outputs() -> None:
     print("[INFO] POS outputs cleaned")
 
 
+def _demo_camera_pipelines() -> list[tuple[str, str, Callable[..., object]]]:
+    """Cameras to run for the active store (skips disabled or footage-less cameras)."""
+    cfg = get_active_store()
+    candidates: list[tuple[str, str, Callable[..., object]]] = [
+        (CAM1_KEY, "cam1_events.jsonl", process_cam1_video),
+        (CAM2_KEY, "cam2_events.jsonl", process_cam2_video),
+        (CAM3_KEY, "cam3_events.jsonl", process_cam3_video),
+        (CAM4_KEY, "cam4_events.jsonl", process_cam4_video),
+        (CAM5_KEY, "cam5_events.jsonl", process_cam5_video),
+    ]
+    runnable = [item for item in candidates if cfg.is_pipeline_camera_runnable(item[0])]
+    skipped = [item[0] for item in candidates if not cfg.is_pipeline_camera_runnable(item[0])]
+    if skipped:
+        print(f"[INFO] Skipping cameras for {cfg.store_key}: {', '.join(skipped)}")
+    return runnable
+
+
 def _clean_purchase_matching_outputs() -> None:
     delete_file_if_exists(PURCHASE_MATCHES_JSON)
     print("[INFO] Purchase matching outputs cleaned")
@@ -126,7 +152,6 @@ def _clean_purchase_matching_outputs() -> None:
 class CameraRun:
     camera_key: str
     output_path: Path
-    notbk_mirror_path: Path
     emitter_stats: EmitStats = field(default_factory=EmitStats)
     event_counts: Counter[str] = field(default_factory=Counter)
     error: str | None = None
@@ -162,20 +187,18 @@ def _run_camera(
     result = CameraRun(
         camera_key=camera_key,
         output_path=out_path,
-        notbk_mirror_path=out_path.with_suffix(".notbk.jsonl"),
     )
 
     t0 = time.perf_counter()
     try:
-        clip_start = parse_clip_start(camera_key)
+        clip_start_by_camera = emitter_clip_start_by_camera(camera_key)
         with PipelineEmitter(
             output_path=out_path,
             store_id=DEFAULT_STORE_ID,
-            clip_start_by_camera={camera_key: clip_start},
+            clip_start_by_camera=clip_start_by_camera,
         ) as emitter:
             proc_stats = process_fn(emitter=emitter, show_window=False)
             result.emitter_stats = emitter.stats
-            result.notbk_mirror_path = emitter.notbk_mirror_path
             if hasattr(proc_stats, "persons_detected"):
                 result.persons_detected = int(proc_stats.persons_detected)
     except Exception as exc:  # noqa: BLE001 (demo orchestration)
@@ -183,9 +206,7 @@ def _run_camera(
     finally:
         result.elapsed_s = time.perf_counter() - t0
 
-    result.event_counts = _count_jsonl_event_types(result.notbk_mirror_path)
-    if not result.event_counts:
-        result.event_counts = _count_jsonl_event_types(result.output_path)
+    result.event_counts = _count_jsonl_event_types(result.output_path)
     return result
 
 
@@ -195,6 +216,7 @@ def _format_inr(value: float) -> str:
 
 def _write_report(
     *,
+    store_key: str,
     database_used: Path,
     camera_runs: list[CameraRun],
     pos_summary: AggregationSummary | None,
@@ -209,50 +231,47 @@ def _write_report(
         "# Demo Run Report",
         "",
         f"**Generated:** {now}  ",
-        f"**Store:** `{DEFAULT_STORE_ID}`  ",
+        f"**Store key:** `{store_key}`  ",
+        f"**Store ID:** `{DEFAULT_STORE_ID}`  ",
         f"**Pipeline output dir:** `{PIPELINE_DEMO_DIR}`  ",
         "",
         "**Clean run:**",
         "YES",
         "",
-        "**Database actually used:**",
+        "**Intelligence database (real CCTV):**",
         f"`{database_used}`",
         "",
         "This report is generated by `scripts/demo_runner.py` and orchestrates the complete Store Intelligence workflow.",
         "",
         "## 1. Camera pipelines (events generated)",
         "",
-        "| Camera | Status | Purpple written | NOTEBK received | Adapt errors | Output | Elapsed (s) |",
-        "|--------|--------|----------------|-----------------|-------------|--------|-------------|",
+        "| Camera | Status | Events written | Adapt errors | Output | Elapsed (s) |",
+        "|--------|--------|----------------|-------------|--------|-------------|",
     ]
 
-    total_purpple = 0
-    total_notbk = 0
+    total_events = 0
     total_adapt_errors = 0
     by_type: Counter[str] = Counter()
     for run in camera_runs:
         status = "OK" if not run.error else f"FAILED ({run.error})"
         lines.append(
-            "| {cam} | {status} | {pur} | {notbk} | {err} | `{out}` | {elapsed:.1f} |".format(
+            "| {cam} | {status} | {written} | {err} | `{out}` | {elapsed:.1f} |".format(
                 cam=run.camera_key,
                 status=status,
-                pur=run.emitter_stats.purpple_written,
-                notbk=run.emitter_stats.notbk_received,
+                written=run.emitter_stats.events_written,
                 err=run.emitter_stats.adaptation_errors,
                 out=run.output_path.relative_to(REPO_ROOT),
                 elapsed=run.elapsed_s,
             )
         )
-        total_purpple += run.emitter_stats.purpple_written
-        total_notbk += run.emitter_stats.notbk_received
+        total_events += run.emitter_stats.events_written
         total_adapt_errors += run.emitter_stats.adaptation_errors
         by_type.update(run.event_counts)
 
     lines.extend(
         [
             "",
-            f"- Total events generated (NOTEBK rows): **{total_notbk}**",
-            f"- Total Purpple events written: **{total_purpple}**",
+            f"- Total events written: **{total_events}**",
             f"- Adaptation errors: **{total_adapt_errors}**",
             "",
             "Event types (all cameras):",
@@ -308,7 +327,9 @@ def _write_report(
             ]
         )
 
-    lines.extend(["", "## 4. Bridge pipeline → product DB (ingest + analytics)", ""])
+    lines.extend(
+        ["", "## 4. Bridge pipeline → intelligence DB (ingest + analytics)", ""]
+    )
     if bridge is None or bridge.metrics is None:
         lines.append("- Bridge validation not run or failed.")
     else:
@@ -358,8 +379,14 @@ def _write_report(
 
 
 def main() -> int:
-    database_used = _init_demo_database()
-    print("[INFO] Demo DB reset")
+    cfg = get_active_store()
+    intelligence_db = intelligence_database_path(cfg)
+    database_used = _init_intelligence_database(
+        store_key=cfg.store_key,
+        intelligence_db=intelligence_db,
+    )
+    print(f"[INFO] Active store: {cfg.store_key}")
+    print(f"[INFO] Intelligence DB reset: {database_used}")
 
     _clean_pipeline_outputs()
 
@@ -368,13 +395,7 @@ def main() -> int:
 
     errors: list[str] = []
 
-    camera_pipelines: list[tuple[str, str, Callable[..., object]]] = [
-        (CAM1_KEY, "cam1_events.jsonl", process_cam1_video),
-        (CAM2_KEY, "cam2_events.jsonl", process_cam2_video),
-        (CAM3_KEY, "cam3_events.jsonl", process_cam3_video),
-        (CAM4_KEY, "cam4_events.jsonl", process_cam4_video),
-        (CAM5_KEY, "cam5_events.jsonl", process_cam5_video),
-    ]
+    camera_pipelines = _demo_camera_pipelines()
     camera_runs: list[CameraRun] = []
     for cam_key, output_name, fn in camera_pipelines:
         run = _run_camera(cam_key, output_name, fn)
@@ -402,13 +423,18 @@ def main() -> int:
 
     assert_demo_database_path(
         bridge_engine,
-        expected=DEMO_PRODUCT_DB,
+        expected=intelligence_db,
         label="demo_runner bridge",
     )
 
+    metric_date = date.fromisoformat(cfg.pos_sale_date)
     bridge_result: BridgeValidationResult | None = None
     try:
-        bridge_result = run_bridge(demo_dir=PIPELINE_DEMO_DIR)
+        bridge_result = run_bridge(
+            demo_dir=PIPELINE_DEMO_DIR,
+            store_id=cfg.store_id,
+            metric_date=metric_date,
+        )
     except Exception as exc:  # noqa: BLE001
         errors.append(f"Bridge failed: {type(exc).__name__}: {exc}")
 
@@ -451,6 +477,7 @@ def main() -> int:
 
     clean_report_files(DEMO_RUN_REPORT_PATHS)
     _write_report(
+        store_key=cfg.store_key,
         database_used=database_used,
         camera_runs=camera_runs,
         pos_summary=pos_summary,
