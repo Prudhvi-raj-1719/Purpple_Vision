@@ -1,4 +1,4 @@
-"""Per-store validation database binding and date discovery for the Streamlit dashboard."""
+"""Per-store dashboard database binding and date discovery for the Streamlit app."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import importlib
 import os
 import sqlite3
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -15,25 +15,33 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in __import__("sys").path:
     __import__("sys").path.insert(0, str(REPO_ROOT))
 
-from scripts.demo_cleanup import force_database_url  # noqa: E402
+from scripts.demo_cleanup import force_database_url, intelligence_database_path  # noqa: E402
 from scripts.synthetic_paths import synthetic_store_spec  # noqa: E402
 
 _ACTIVE_STORE_KEY: str | None = None
 
+STORE1_REAL_KEY = "store1_real"
+
 
 @dataclass(frozen=True)
 class DashboardStoreOption:
-    """One synthetic validation store exposed in the dashboard selector."""
+    """One dashboard store selector entry (synthetic validation or CCTV intelligence)."""
 
     label: str
     store_key: str
     store_id: str
-    validation_db: Path
+    database_path: Path
     default_metric_date: date
+    is_intelligence_db: bool = False
+
+    @property
+    def validation_db(self) -> Path:
+        """Backward-compatible alias for ``database_path``."""
+        return self.database_path
 
 
 def dashboard_store_options() -> tuple[DashboardStoreOption, ...]:
-    """Store 1 / Store 2 validation fixtures (isolated SQLite files)."""
+    """Store 1 / Store 2 validation fixtures plus store_1 CCTV intelligence DB."""
     options: list[DashboardStoreOption] = []
     for store_key in ("store_1", "store_2"):
         spec = synthetic_store_spec(store_key)
@@ -42,10 +50,24 @@ def dashboard_store_options() -> tuple[DashboardStoreOption, ...]:
                 label="Store 1" if store_key == "store_1" else "Store 2",
                 store_key=store_key,
                 store_id=spec.store_id,
-                validation_db=spec.validation_db,
+                database_path=spec.validation_db,
                 default_metric_date=spec.metric_date,
             )
         )
+
+    from pipeline.store_config import get_store_config
+
+    cfg = get_store_config("store_1")
+    options.append(
+        DashboardStoreOption(
+            label="store1_real",
+            store_key=STORE1_REAL_KEY,
+            store_id=cfg.store_id,
+            database_path=intelligence_database_path(cfg),
+            default_metric_date=date.fromisoformat(cfg.pos_sale_date),
+            is_intelligence_db=True,
+        )
+    )
     return tuple(options)
 
 
@@ -54,6 +76,14 @@ def option_for_key(store_key: str) -> DashboardStoreOption:
         if option.store_key == store_key:
             return option
     raise ValueError(f"Unknown dashboard store key: {store_key!r}")
+
+
+def missing_database_hint(option: DashboardStoreOption) -> str:
+    if option.is_intelligence_db:
+        return (
+            "Run: $env:PURPPLE_STORE = \"store_1\"; python scripts/demo_runner.py"
+        )
+    return f"python scripts/demo_validation_run.py --store {option.store_key}"
 
 
 def list_event_dates_from_db(db_path: Path, store_id: str) -> list[date]:
@@ -86,31 +116,35 @@ def list_event_dates_from_db(db_path: Path, store_id: str) -> list[date]:
     return dates
 
 
-def bind_validation_database(store_key: str) -> DashboardStoreOption:
+def bind_dashboard_database(store_key: str) -> DashboardStoreOption:
     """
-    Point the application ORM at the selected store validation SQLite file.
+    Point the application ORM at the selected dashboard SQLite file.
 
     Rebinds only when the store key changes (same pattern as demo_validation_run).
     """
     global _ACTIVE_STORE_KEY
 
     option = option_for_key(store_key)
-    if _ACTIVE_STORE_KEY == store_key and option.validation_db.is_file():
+    if _ACTIVE_STORE_KEY == store_key and option.database_path.is_file():
         return option
 
-    if not option.validation_db.is_file():
+    if not option.database_path.is_file():
         raise FileNotFoundError(
-            f"Validation database not found for {option.label}: {option.validation_db}. "
-            "Run: python scripts/demo_validation_run.py --store "
-            f"{store_key}"
+            f"Database not found for {option.label}: {option.database_path}. "
+            f"Run: {missing_database_hint(option)}"
         )
 
-    force_database_url(option.validation_db)
+    force_database_url(option.database_path)
     import app.db as db_module
 
     importlib.reload(db_module)
     _ACTIVE_STORE_KEY = store_key
     return option
+
+
+def bind_validation_database(store_key: str) -> DashboardStoreOption:
+    """Alias for :func:`bind_dashboard_database`."""
+    return bind_dashboard_database(store_key)
 
 
 def use_api_client() -> bool:
@@ -124,6 +158,11 @@ def api_base_url_for_store(store_key: str) -> str:
 
     Falls back to API_BASE_URL when STORE_{N}_API_BASE_URL is unset.
     """
+    if store_key == STORE1_REAL_KEY:
+        return os.getenv(
+            "STORE_1_API_BASE_URL",
+            os.getenv("API_BASE_URL", "http://localhost:8000"),
+        ).rstrip("/")
     env_key = f"STORE_{store_key[-1]}_API_BASE_URL"
     return os.getenv(env_key, os.getenv("API_BASE_URL", "http://localhost:8000")).rstrip("/")
 
@@ -134,11 +173,11 @@ def load_analytics_from_validation_db(
     metric_date: date,
 ) -> dict[str, Any]:
     """
-    Load the same payloads the REST API returns, using the bound validation database.
+    Load the same payloads the REST API returns, using the bound dashboard database.
 
     Does not modify analytics logic — calls existing compute_* functions.
     """
-    bind_validation_database(store_key)
+    bind_dashboard_database(store_key)
 
     from app.anomalies import compute_store_anomalies
     from app.business_insights import compute_store_business_insights
@@ -155,7 +194,7 @@ def load_analytics_from_validation_db(
     from app.staff_analysis import get_staff_analysis
 
     if not is_database_available():
-        raise RuntimeError("Validation database is not available")
+        raise RuntimeError("Dashboard database is not available")
 
     with get_session() as session:
         events = fetch_store_events(session, store_id, day=metric_date)

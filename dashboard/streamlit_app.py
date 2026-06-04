@@ -1,8 +1,7 @@
-"""Store performance dashboard for retail managers — presentation layer only."""
+"""Retail Intelligence dashboard — data loading, orchestration, and analytics logic."""
 
 from __future__ import annotations
 
-import math
 import os
 import sys
 from pathlib import Path
@@ -18,15 +17,30 @@ from datetime import date, datetime, timezone
 from typing import Any
 
 import httpx
-import plotly.graph_objects as go
 import streamlit as st
 
+from dashboard.saas_presentation import (
+    hero_header_html,
+    inject_saas_styles,
+    render_ai_insights,
+    render_checkout_command_center,
+    render_customer_journey,
+    render_executive_metrics,
+    render_floor_intelligence,
+    render_operations_monitoring,
+    render_recommended_actions,
+    render_technical_panel,
+    render_todays_story,
+    render_trust_center,
+    sidebar_brand_html,
+)
 from dashboard.validation_context import (
     api_base_url_for_store,
     bind_validation_database,
     dashboard_store_options,
     list_event_dates_from_db,
     load_analytics_from_validation_db,
+    missing_database_hint,
     use_api_client,
 )
 
@@ -49,215 +63,7 @@ FUNNEL_LABELS: dict[str, str] = {
     "converted_visitors": "Made a purchase",
 }
 
-DEFAULT_PLOT_MARGIN = dict(l=16, r=16, t=48, b=16)
-
-PLOTLY_LAYOUT = dict(
-    font=dict(family="DM Sans, Segoe UI, sans-serif", size=13, color="#334155"),
-    paper_bgcolor="rgba(0,0,0,0)",
-    plot_bgcolor="rgba(0,0,0,0)",
-    colorway=["#0ea5e9", "#6366f1", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6"],
-)
-
-EXEC_CSS = """
-<style>
-    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');
-    .stApp { background: #e8edf4; }
-    .main .block-container {
-        padding-top: 0.5rem !important;
-        padding-bottom: 1rem !important;
-        max-width: 1360px;
-    }
-    div[data-testid="stAppViewBlockContainer"] > section > div {
-        padding-top: 0.35rem !important;
-    }
-    h1, h2, h3 { font-family: 'DM Sans', sans-serif !important; }
-    .page-header {
-        margin: 0 0 0.65rem 0; padding: 0.85rem 1rem;
-        background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 100%);
-        border-radius: 10px;
-    }
-    .page-header h1 {
-        font-size: 1.85rem !important; font-weight: 700 !important;
-        color: #f8fafc !important; margin: 0 !important; line-height: 1.2 !important;
-    }
-    .page-meta { color: #cbd5e1; font-size: 0.85rem; margin: 0.2rem 0 0 0; }
-    .section-block {
-        margin-bottom: 0.7rem; padding: 0.75rem 0.9rem 0.65rem;
-        background: #fff; border-radius: 10px;
-        border: 1px solid #d8e0ea;
-        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
-    }
-    .section-block.journey { border-top: 3px solid #0284c7; }
-    .section-block.zones { border-top: 3px solid #0284c7; }
-    .section-block.actions { border-top: 3px solid #ea580c; }
-    .section-block.monitor { border-top: 3px solid #64748b; }
-    .section-block.checkout { border-top: 3px solid #059669; }
-    .checkout-status {
-        border-radius: 8px; padding: 0.65rem 0.85rem; margin-bottom: 0.55rem;
-        font-size: 0.95rem; font-weight: 600;
-    }
-    .checkout-status.healthy {
-        background: #ecfdf5; border: 1px solid #6ee7b7; color: #047857;
-    }
-    .checkout-status.attention {
-        background: #fffbeb; border: 1px solid #fcd34d; color: #b45309;
-    }
-    .checkout-metrics {
-        display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5rem;
-        margin-bottom: 0.55rem;
-    }
-    @media (max-width: 900px) { .checkout-metrics { grid-template-columns: repeat(2, 1fr); } }
-    .section-title {
-        font-size: 1.32rem !important; font-weight: 700 !important;
-        color: #0f172a !important; margin: 0 0 0.5rem 0 !important;
-        padding-left: 0.55rem; border-left: 4px solid #0284c7;
-    }
-    .section-title.orange { border-left-color: #ea580c; }
-    .sub-label {
-        font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
-        letter-spacing: 0.07em; margin: 0.4rem 0 0.25rem 0;
-    }
-    .sub-label.green { color: #047857; }
-    .sub-label.red { color: #b91c1c; }
-    .sub-label.blue { color: #0369a1; }
-    ul.exec-bullets {
-        margin: 0.15rem 0 0.35rem 0; padding-left: 1.2rem;
-        color: #1e293b; font-size: 0.9rem; line-height: 1.5;
-    }
-    ul.exec-bullets li { margin-bottom: 0.22rem; }
-    ul.exec-bullets.orange li::marker { color: #ea580c; }
-    .kpi-row { display: grid; grid-template-columns: repeat(6, 1fr); gap: 0.5rem; margin-bottom: 0.55rem; }
-    @media (max-width: 1100px) { .kpi-row { grid-template-columns: repeat(3, 1fr); } }
-    .kpi-card {
-        background: #f8fafc; border-radius: 8px; padding: 0.55rem 0.65rem;
-        border: 1px solid #e2e8f0; border-top: 3px solid #94a3b8;
-    }
-    .kpi-card .kpi-lbl { font-size: 0.68rem; font-weight: 600; text-transform: uppercase; color: #64748b; }
-    .kpi-card .kpi-val { font-size: 1.2rem; font-weight: 700; color: #0f172a; margin-top: 0.15rem; line-height: 1.2; }
-    .kpi-card.accent-green { border-top-color: #059669; background: #f0fdf4; }
-    .kpi-card.accent-blue { border-top-color: #0284c7; background: #f0f9ff; }
-    .kpi-card.accent-red { border-top-color: #dc2626; background: #fef2f2; }
-    .kpi-card.accent-neutral { border-top-color: #64748b; }
-    .action-card {
-        background: #fffbeb; border: 1px solid #fde68a; border-left: 4px solid #ea580c;
-        border-radius: 8px; padding: 0.55rem 0.75rem; margin-bottom: 0.5rem;
-    }
-    .action-card.critical { background: #fef2f2; border-color: #fecaca; border-left-color: #dc2626; }
-    .action-card h4 { margin: 0 0 0.3rem 0; font-size: 0.98rem; color: #0f172a; font-weight: 700; }
-    .action-card .row { font-size: 0.87rem; color: #334155; margin: 0.18rem 0; line-height: 1.45; }
-    .action-card strong { color: #9a3412; font-size: 0.68rem; text-transform: uppercase; margin-right: 0.3rem; }
-    .action-card.critical strong { color: #b91c1c; }
-    .zone-line {
-        font-size: 0.88rem; color: #1e293b; margin: 0.2rem 0; padding: 0.35rem 0.5rem;
-        background: #f0fdf4; border-radius: 6px; border-left: 3px solid #059669;
-    }
-    .zone-line.attention {
-        background: #fef2f2; border-left-color: #dc2626;
-    }
-    .zone-line.moderate {
-        background: #fffbeb; border-left-color: #f59e0b;
-    }
-    div[data-testid="stSidebar"] { background: #0f172a; }
-    div[data-testid="stSidebar"] label { color: #94a3b8 !important; }
-    .monitor-grid {
-        display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.55rem;
-        margin-bottom: 0.65rem;
-    }
-    @media (max-width: 900px) { .monitor-grid { grid-template-columns: repeat(2, 1fr); } }
-    .monitor-status-card {
-        background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;
-        padding: 0.6rem 0.7rem; min-height: 4.5rem;
-    }
-    .monitor-status-card .ms-label {
-        font-size: 0.68rem; font-weight: 700; text-transform: uppercase;
-        letter-spacing: 0.06em; color: #64748b; margin-bottom: 0.25rem;
-    }
-    .monitor-status-card .ms-value {
-        font-size: 1.05rem; font-weight: 700; color: #0f172a; line-height: 1.25;
-        word-break: break-word;
-    }
-    .monitor-status-card .ms-value.ok { color: #047857; }
-    .monitor-status-card .ms-value.warn { color: #b45309; }
-    .monitor-status-card .ms-value.bad { color: #b91c1c; }
-    .monitor-status-card .ms-sub {
-        font-size: 0.8rem; font-weight: 500; color: #475569; margin-top: 0.35rem;
-        line-height: 1.35; word-break: break-word;
-    }
-    .monitor-facts-title {
-        font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
-        letter-spacing: 0.06em; color: #475569; margin: 0.15rem 0 0.3rem 0;
-    }
-    .verify-panel {
-        background: linear-gradient(180deg, #f0fdf4 0%, #ecfdf5 100%);
-        border: 1px solid #86efac; border-radius: 10px;
-        padding: 0.85rem 1rem; margin-bottom: 0.75rem;
-        box-shadow: 0 2px 8px rgba(5, 150, 105, 0.12);
-    }
-    .verify-panel h3 {
-        margin: 0 0 0.35rem 0 !important; font-size: 1.15rem !important;
-        color: #065f46 !important; font-weight: 700 !important;
-    }
-    .verify-panel .verify-sub {
-        font-size: 0.84rem; color: #047857; margin: 0 0 0.65rem 0;
-    }
-    .verify-metrics {
-        display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.5rem;
-        margin-bottom: 0.65rem;
-    }
-    @media (max-width: 1000px) { .verify-metrics { grid-template-columns: repeat(3, 1fr); } }
-    .verify-metric {
-        background: #fff; border-radius: 8px; padding: 0.5rem 0.6rem;
-        border: 1px solid #bbf7d0;
-    }
-    .verify-metric .vm-lbl {
-        font-size: 0.65rem; font-weight: 700; text-transform: uppercase;
-        color: #64748b; letter-spacing: 0.04em;
-    }
-    .verify-metric .vm-val {
-        font-size: 1.15rem; font-weight: 700; color: #0f172a; margin-top: 0.2rem;
-    }
-    .verify-badges { display: flex; flex-wrap: wrap; gap: 0.45rem; }
-    .verify-badge {
-        font-size: 0.8rem; font-weight: 600; color: #065f46;
-        background: #fff; border: 1px solid #6ee7b7; border-radius: 999px;
-        padding: 0.28rem 0.65rem;
-    }
-    .tech-panel-wrap {
-        background: linear-gradient(160deg, #0f172a 0%, #1e293b 55%, #0f172a 100%);
-        border: 2px solid #475569; border-radius: 12px;
-        padding: 1rem 1.1rem 0.85rem; margin-top: 0.25rem; margin-bottom: 1rem;
-        box-shadow: 0 8px 24px rgba(15, 23, 42, 0.35);
-    }
-    .tech-panel-header {
-        display: flex; align-items: flex-start; gap: 0.65rem; margin-bottom: 0.75rem;
-    }
-    .tech-panel-icon {
-        font-size: 1.65rem; line-height: 1; flex-shrink: 0;
-    }
-    .tech-panel-header h3 {
-        margin: 0 !important; font-size: 1.2rem !important;
-        color: #10b981 !important; font-weight: 700 !important;
-        text-shadow: 0 1px 12px rgba(16, 185, 129, 0.45);
-    }
-    .tech-panel-header p {
-        margin: 0.25rem 0 0 0; font-size: 0.86rem; color: #94a3b8; line-height: 1.45;
-    }
-    .tech-panel-wrap [data-testid="stTabs"] {
-        background: #1e293b; border-radius: 8px; padding: 0.35rem 0.35rem 0.5rem;
-    }
-    .tech-panel-wrap [data-testid="stTabs"] button {
-        color: #cbd5e1 !important; font-weight: 600 !important;
-    }
-    .tech-panel-wrap [data-testid="stTabs"] button[aria-selected="true"] {
-        color: #38bdf8 !important;
-    }
-    .tech-panel-wrap [data-testid="stCaption"] { color: #94a3b8 !important; }
-    .tech-panel-wrap [data-testid="stJson"] {
-        font-size: 0.78rem; background: #0f172a !important;
-        border: 1px solid #334155; border-radius: 6px;
-    }
-</style>
-"""
+# Presentation CSS and HTML live in dashboard.saas_presentation (SAAS_CSS).
 
 
 @dataclass
@@ -436,11 +242,6 @@ def text_to_bullets(text: str) -> list[str]:
     return parts
 
 
-def bullets_html(items: list[str]) -> str:
-    if not items:
-        return '<ul class="exec-bullets"><li>—</li></ul>'
-    return "<ul class=\"exec-bullets\">" + "".join(f"<li>{item}</li>" for item in items) + "</ul>"
-
 
 def dedupe_action_items(items: list[str]) -> list[str]:
     """Remove near-duplicate actions (case-insensitive) for cleaner UI."""
@@ -593,17 +394,6 @@ def estimate_events_processed(
     queue_joins = funnel_stage_count(funnel, "billing_queue")
     return max(0, total_sessions * 2 + zone_visits + queue_joins)
 
-
-def monitor_status_card(label: str, value: str, css: str, subtitle: str = "") -> str:
-    sub_html = (
-        f'<div class="ms-sub">{subtitle}</div>' if subtitle else ""
-    )
-    return (
-        f'<div class="monitor-status-card">'
-        f'<div class="ms-label">{label}</div>'
-        f'<div class="ms-value {css}">{value}</div>'
-        f"{sub_html}</div>"
-    )
 
 
 def format_utc_timestamp(value: str | None) -> str:
@@ -969,543 +759,47 @@ def build_business_insights(
     return insights[:4]
 
 
-def build_funnel_sankey(funnel: dict[str, Any]) -> go.Figure:
-    uv = funnel_stage_count(funnel, "unique_visitors")
-    rz = funnel_stage_count(funnel, "reached_any_zone")
-    bq = funnel_stage_count(funnel, "billing_queue")
-    cv = funnel_stage_count(funnel, "converted_visitors")
-
-    def stage_label(name: str, count: int) -> str:
-        return f"{name}  ({count})"
-
-    labels = [
-        stage_label("Entered store", uv),
-        stage_label("Browsed products", rz),
-        stage_label("Reached checkout", bq),
-        stage_label("Made a purchase", cv),
-        stage_label("Left before browsing", max(0, uv - rz)),
-        stage_label("Left before checkout", max(0, rz - bq)),
-        stage_label("Left without buying", max(0, bq - cv)),
-    ]
-    source: list[int] = []
-    target: list[int] = []
-    value: list[int] = []
-    link_colors: list[str] = []
-
-    def add_link(s: int, t: int, v: int, color: str) -> None:
-        if v > 0:
-            source.append(s)
-            target.append(t)
-            value.append(v)
-            link_colors.append(color)
-
-    add_link(0, 1, rz, "rgba(2, 132, 199, 0.45)")
-    add_link(0, 4, max(0, uv - rz), "rgba(148, 163, 184, 0.35)")
-    add_link(1, 2, min(bq, rz), "rgba(37, 99, 235, 0.45)")
-    add_link(1, 5, max(0, rz - bq), "rgba(148, 163, 184, 0.35)")
-    add_link(2, 3, min(cv, bq), "rgba(5, 150, 105, 0.55)")
-    add_link(2, 6, max(0, bq - cv), "rgba(220, 38, 38, 0.4)")
-
-    fig = go.Figure(
-        data=[
-            go.Sankey(
-                arrangement="snap",
-                node=dict(
-                    pad=42,
-                    thickness=28,
-                    line=dict(color="#1e293b", width=1),
-                    label=labels,
-                    color=[
-                        "#0284c7",
-                        "#2563eb",
-                        "#1d4ed8",
-                        "#059669",
-                        "#cbd5e1",
-                        "#cbd5e1",
-                        "#fca5a5",
-                    ],
-                ),
-                link=dict(
-                    source=source,
-                    target=target,
-                    value=value,
-                    color=link_colors,
-                    hovertemplate="%{value} customers<extra></extra>",
-                ),
-            )
-        ]
-    )
-    layout = {**PLOTLY_LAYOUT, "height": 480, "margin": dict(l=24, r=24, t=20, b=24)}
-    layout["font"] = dict(family="DM Sans, Segoe UI, sans-serif", size=14, color="#0f172a")
-    fig.update_layout(**layout)
-    return fig
 
 
-def build_zone_floor_heatmap(ranked: list[dict[str, Any]]) -> go.Figure:
-    if not ranked:
-        fig = go.Figure()
-        fig.update_layout(
-            **PLOTLY_LAYOUT,
-            height=220,
-            margin=DEFAULT_PLOT_MARGIN,
-            title="Product areas — customer interest today",
-        )
-        return fig
+def checkout_status_pill(metric: str, value: float | int) -> str:
+    """Presentation-only status labels for checkout KPI cards."""
+    if metric == "queue_depth":
+        if int(value) <= 2:
+            return "excellent"
+        if int(value) <= 4:
+            return "healthy"
+        return "warning"
+    if metric == "abandonment":
+        if float(value) < 0.10:
+            return "excellent"
+        if float(value) < 0.20:
+            return "healthy"
+        return "warning"
+    if metric == "reached":
+        if int(value) >= 20:
+            return "excellent"
+        if int(value) >= 5:
+            return "healthy"
+        return "warning"
+    if int(value) >= 10:
+        return "excellent"
+    if int(value) >= 1:
+        return "healthy"
+    return "warning"
 
-    n = len(ranked)
-    cols = max(3, math.ceil(math.sqrt(n)))
-    rows = math.ceil(n / cols)
-    grid = [[0.0] * cols for _ in range(rows)]
-    labels = [[""] * cols for _ in range(rows)]
-    for idx, zone in enumerate(ranked):
-        r, c = divmod(idx, cols)
-        grid[r][c] = zone["score"]
-        labels[r][c] = zone["zone_id"]
-
-    fig = go.Figure(
-        data=go.Heatmap(
-            z=grid,
-            text=labels,
-            texttemplate="%{text}",
-            textfont=dict(size=11, color="#0f172a"),
-            colorscale=[
-                [0.0, "#e2e8f0"],
-                [0.35, "#93c5fd"],
-                [0.65, "#3b82f6"],
-                [1.0, "#1d4ed8"],
-            ],
-            showscale=True,
-            colorbar=dict(title="Interest level", thickness=14, len=0.75),
-            hovertemplate="Area: %{text}<br>Interest: %{z}<extra></extra>",
-        )
-    )
-    fig.update_layout(
-        **PLOTLY_LAYOUT,
-        height=max(220, rows * 58),
-        margin=DEFAULT_PLOT_MARGIN,
-        title=dict(text="Store floor — where customers spent time", font=dict(size=15, color="#0f172a")),
-        xaxis=dict(showgrid=False, showticklabels=False),
-        yaxis=dict(showgrid=False, showticklabels=False, autorange="reversed"),
-    )
-    return fig
-
-
-def kpi_card_html(label: str, value: str, accent: str) -> str:
-    return (
-        f'<div class="kpi-card accent-{accent}">'
-        f'<div class="kpi-lbl">{label}</div><div class="kpi-val">{value}</div></div>'
-    )
-
-
-def inject_styles() -> None:
-    st.markdown(EXEC_CSS, unsafe_allow_html=True)
-
-
-def section_title(title: str, *, accent: str = "blue") -> None:
-    extra = " orange" if accent == "orange" else ""
-    st.markdown(f'<h2 class="section-title{extra}">{title}</h2>', unsafe_allow_html=True)
-
-
-def render_store_summary(
-    *,
-    store_id: str,
-    selected_date: date,
-    unique_visitors: int,
-    purchase_count: int,
-    total_revenue_inr: float,
-    conversion_rate: float,
-    top_zone: str,
-    weak_zone: str,
-    insights_payload: dict[str, Any] | None,
-) -> None:
-    st.markdown('<div class="section-block">', unsafe_allow_html=True)
-    section_title("Store summary")
-    st.markdown(
-        '<div class="kpi-row">'
-        + kpi_card_html("Visitors", f"{unique_visitors:,}", "neutral")
-        + kpi_card_html("Purchases", f"{purchase_count:,}", "neutral")
-        + kpi_card_html("Revenue", format_inr(total_revenue_inr), "green")
-        + kpi_card_html("Conversion", format_pct(conversion_rate), "green")
-        + kpi_card_html("Top area", friendly_zone(top_zone), "blue")
-        + kpi_card_html("Focus area", friendly_zone(weak_zone), "red")
-        + "</div>",
-        unsafe_allow_html=True,
-    )
-
-    insight_data = (insights_payload or {}).get("insights") or {}
-    store_summary = str(insight_data.get("store_summary") or "").strip()
-    manager_actions = insight_data.get("manager_actions") or []
-
-    if not store_summary:
-        store_summary = (
-            f"{unique_visitors:,} customers visited on "
-            f"{selected_date.strftime('%d %b %Y')} at {store_id}."
-        )
-    if not manager_actions:
-        manager_actions = [
-            "Review checkout staffing during peak hours.",
-            "Walk the store path from entrance to till.",
-            "Refresh displays in the lowest-performing product area.",
-        ]
-
-    st.markdown('<p class="sub-label blue">Today summary</p>', unsafe_allow_html=True)
-    st.markdown(
-        f'<p style="color:#1e293b;font-size:0.92rem;line-height:1.55;margin:0.1rem 0 0.35rem 0;">'
-        f"{store_summary}</p>",
-        unsafe_allow_html=True,
-    )
-    st.markdown('<p class="sub-label orange">Recommended actions</p>', unsafe_allow_html=True)
-    manager_actions = dedupe_action_items([str(x) for x in manager_actions])
-    st.markdown(
-        '<ul class="exec-bullets orange">'
-        + "".join(f"<li>{item}</li>" for item in manager_actions)
-        + "</ul>",
-        unsafe_allow_html=True,
-    )
-    st.markdown("</div>", unsafe_allow_html=True)
-
-
-def render_funnel_sankey(funnel: dict[str, Any]) -> None:
-    st.markdown('<div class="section-block journey">', unsafe_allow_html=True)
-    section_title("Customer shopping journey")
-    st.plotly_chart(build_funnel_sankey(funnel), use_container_width=True)
-    overall = float(funnel.get("overall_conversion_rate", 0.0))
-    st.markdown(
-        f'<p style="color:#047857;font-weight:600;font-size:0.9rem;margin:0.2rem 0 0 0;">'
-        f"Visitors who bought: {format_pct(overall)}</p>",
-        unsafe_allow_html=True,
-    )
-    st.markdown("</div>", unsafe_allow_html=True)
-
-
-def render_checkout_performance(
-    checkout: CheckoutPerformance,
-    *,
-    peak_queue_depth: int,
-    queue_abandonment: float,
-    reached_checkout_count: int,
-    completed_purchase_count: int,
-    insights_payload: dict[str, Any] | None = None,
-) -> None:
-    st.markdown('<div class="section-block checkout">', unsafe_allow_html=True)
-    section_title("Checkout performance")
-    st.markdown(
-        '<div class="checkout-metrics">'
-        + kpi_card_html("Peak queue depth", f"{peak_queue_depth:,}", "neutral")
-        + kpi_card_html("Queue abandonment", format_pct(queue_abandonment), "neutral")
-        + kpi_card_html("Reached checkout", f"{reached_checkout_count:,}", "blue")
-        + kpi_card_html("Completed purchase", f"{completed_purchase_count:,}", "green")
-        + "</div>",
-        unsafe_allow_html=True,
-    )
-    insight_data = (insights_payload or {}).get("insights") or {}
-    checkout_summary = str(insight_data.get("checkout_summary") or "").strip()
-    checkout_actions = insight_data.get("checkout_actions") or []
-
-    if checkout_summary:
-        st.markdown(
-            f'<p style="color:#1e293b;font-size:0.92rem;line-height:1.55;margin:0.1rem 0 0.35rem 0;">'
-            f"{checkout_summary}</p>",
-            unsafe_allow_html=True,
-        )
-    if checkout_actions:
-        st.markdown('<p class="sub-label orange">Recommended checkout actions</p>', unsafe_allow_html=True)
-        st.markdown(
-            bullets_html(dedupe_action_items([str(x) for x in checkout_actions])),
-            unsafe_allow_html=True,
-        )
-    st.markdown("</div>", unsafe_allow_html=True)
-
-
-def render_zone_intelligence(ranked: list[dict[str, Any]]) -> None:
-    st.markdown('<div class="section-block zones">', unsafe_allow_html=True)
-    section_title("Product area performance")
-    if not ranked:
-        st.info("No product-area activity recorded for this day.")
-        st.markdown("</div>", unsafe_allow_html=True)
-        return
-
-    top_areas = sorted(
-        [zone for zone in ranked if float(zone.get("score", 0.0)) >= 50.0],
-        key=lambda item: float(item.get("score", 0.0)),
-        reverse=True,
-    )
-    moderate_areas = sorted(
-        [
-            zone
-            for zone in ranked
-            if 10.0 <= float(zone.get("score", 0.0)) < 50.0
-        ],
-        key=lambda item: float(item.get("score", 0.0)),
-        reverse=True,
-    )
-    attention_areas = sorted(
-        [zone for zone in ranked if float(zone.get("score", 0.0)) < 10.0],
-        key=lambda item: float(item.get("score", 0.0)),
-    )
-    st.plotly_chart(build_zone_floor_heatmap(ranked), use_container_width=True)
-
-    lc, mc, rc = st.columns(3)
-    with lc:
-        st.markdown('<p class="sub-label green">Top performing areas</p>', unsafe_allow_html=True)
-        st.caption("Strong customer engagement")
-        if not top_areas:
-            st.markdown(
-                '<p class="zone-line">No areas crossed the strong engagement threshold today</p>',
-                unsafe_allow_html=True,
-            )
-        for z in top_areas:
-            st.markdown(
-                f'<p class="zone-line"><strong>{friendly_zone(z["zone_id"])}</strong> — '
-                f'{area_interest_language(z["score"], z["visits"], z["dwell_ms"])}</p>',
-                unsafe_allow_html=True,
-            )
-    with mc:
-        st.markdown('<p class="sub-label orange">Moderate performance</p>', unsafe_allow_html=True)
-        st.caption("Healthy engagement with improvement opportunities")
-        if not moderate_areas:
-            st.markdown(
-                '<p class="zone-line moderate">No areas fell into the moderate engagement band today</p>',
-                unsafe_allow_html=True,
-            )
-        for z in moderate_areas:
-            st.markdown(
-                f'<p class="zone-line moderate"><strong>{friendly_zone(z["zone_id"])}</strong> — '
-                f'{area_interest_language(z["score"], z["visits"], z["dwell_ms"])}</p>',
-                unsafe_allow_html=True,
-            )
-    with rc:
-        st.markdown('<p class="sub-label red">Area requiring attention</p>', unsafe_allow_html=True)
-        st.caption("Low engagement requiring business action")
-        if not attention_areas:
-            st.markdown(
-                '<p class="zone-line attention">No low-engagement product areas were flagged today</p>',
-                unsafe_allow_html=True,
-            )
-        for z in attention_areas:
-            st.markdown(
-                f'<p class="zone-line attention"><strong>{friendly_zone(z["zone_id"])}</strong> — '
-                f'{area_interest_language(z["score"], z["visits"], z["dwell_ms"])}</p>',
-                unsafe_allow_html=True,
-            )
-    st.markdown("</div>", unsafe_allow_html=True)
-
-
-def render_business_insight_signals(insights_payload: dict[str, Any] | None) -> None:
-    """Business risks and positive signals from the business-insights API."""
-    insight_data = (insights_payload or {}).get("insights") or {}
-    business_risks = insight_data.get("business_risks") or [
-        "No major operational risks flagged from today's analytics.",
-    ]
-    positive_signals = insight_data.get("positive_signals") or [
-        "Core store analytics are available for this trading day.",
-    ]
-
-    st.markdown('<div class="section-block actions">', unsafe_allow_html=True)
-    section_title("Business insight signals", accent="orange")
-    st.markdown('<p class="sub-label red">Business risks</p>', unsafe_allow_html=True)
-    st.markdown(bullets_html(business_risks), unsafe_allow_html=True)
-    st.markdown('<p class="sub-label green">Positive signals</p>', unsafe_allow_html=True)
-    st.markdown(bullets_html(positive_signals), unsafe_allow_html=True)
-    source = (insights_payload or {}).get("source", "fallback")
-    st.caption(f"Insight source: {source}")
-    st.markdown("</div>", unsafe_allow_html=True)
-
-
-def render_store_monitoring(
-    health: dict[str, Any],
-    store_id: str,
-    heatmap: dict[str, Any],
-    *,
-    unique_visitors: int,
-    total_sessions: int,
-    events_processed: int,
-    pos_transactions: int,
-    queue_depth: int,
-    avg_dwell_ms: float,
-) -> None:
-    feed = store_feed_status(health, store_id)
-    feed_stale = bool(feed.get("stale", False)) if feed else False
-    db_ok = bool(health.get("database_available", False))
-    has_confidence = bool(heatmap.get("data_confidence", False))
-    last_activity = format_utc_timestamp(feed.get("last_event_at") if feed else None)
-
-    store_val, store_css = store_status_label(health, db_ok)
-    analytics_val, analytics_css = analytics_status_label(db_ok, feed_stale)
-    camera_val, camera_css = camera_activity_label(feed_stale)
-    confidence_val, confidence_sub, confidence_css = data_confidence_display(
-        unique_visitors,
-        has_confidence,
-        events_processed=events_processed,
-    )
-
-    st.markdown('<div class="section-block monitor">', unsafe_allow_html=True)
-    section_title("Store monitoring")
-    cards_html = (
-        '<div class="monitor-grid">'
-        + monitor_status_card("Store Status", store_val, store_css)
-        + monitor_status_card("Analytics Status", analytics_val, analytics_css)
-        + monitor_status_card("Camera Activity", camera_val, camera_css)
-        + monitor_status_card(
-            "Data Confidence",
-            confidence_val,
-            confidence_css,
-            subtitle=confidence_sub,
-        )
-        + "</div>"
-    )
-    st.markdown(cards_html, unsafe_allow_html=True)
-
-    st.markdown('<p class="monitor-facts-title">Supporting facts</p>', unsafe_allow_html=True)
-    facts = [
-        f"Visitors analyzed: {unique_visitors:,}",
-        f"Sessions created: {total_sessions:,}",
-        f"Events processed: {events_processed:,}",
-        f"POS transactions: {pos_transactions:,}",
-        f"Last activity timestamp: {last_activity}",
-    ]
-    if queue_depth > 0:
-        facts.append(
-            f"Customers waiting at checkout: {queue_depth:,}"
-        )
-    facts.append(f"Typical time in store: {format_dwell_ms(avg_dwell_ms)}")
-    st.markdown(bullets_html(facts), unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-
-def render_data_verification(
-    *,
-    unique_visitors: int,
-    total_sessions: int,
-    events_processed: int,
-    pos_transactions: int,
-    total_revenue_inr: float,
-    api_loaded: bool,
-    has_confidence: bool,
-) -> None:
-    badges: list[str] = []
-    if api_loaded:
-        badges.append("✓ API data loaded successfully")
-    if api_loaded and unique_visitors > 0:
-        badges.append("✓ Dashboard matches analytics")
-    if has_confidence or unique_visitors >= 20:
-        badges.append("✓ Validation dataset loaded")
-    elif unique_visitors > 0:
-        badges.append("✓ Store activity recorded for this day")
-    if not badges:
-        badges.append("Awaiting store data for this day")
-
-    badge_html = "".join(
-        f'<span class="verify-badge">{badge}</span>' for badge in badges
-    )
-    panel_html = (
-        '<div class="verify-panel">'
-        "<h3>Data verification</h3>"
-        '<p class="verify-sub">Cross-check the numbers shown on this dashboard '
-        "against the analytics engine for the selected store and day.</p>"
-        '<div class="verify-metrics">'
-        f'<div class="verify-metric"><div class="vm-lbl">Events Processed</div>'
-        f'<div class="vm-val">{events_processed:,}</div></div>'
-        f'<div class="verify-metric"><div class="vm-lbl">Sessions Created</div>'
-        f'<div class="vm-val">{total_sessions:,}</div></div>'
-        f'<div class="verify-metric"><div class="vm-lbl">Visitors Tracked</div>'
-        f'<div class="vm-val">{unique_visitors:,}</div></div>'
-        f'<div class="verify-metric"><div class="vm-lbl">POS Transactions</div>'
-        f'<div class="vm-val">{pos_transactions:,}</div></div>'
-        f'<div class="verify-metric"><div class="vm-lbl">Revenue</div>'
-        f'<div class="vm-val">{format_inr(total_revenue_inr)}</div></div>'
-        "</div>"
-        f'<div class="verify-badges">{badge_html}</div>'
-        "</div>"
-    )
-    st.markdown(panel_html, unsafe_allow_html=True)
-
-
-def render_technical_details(
-    *,
-    health: dict[str, Any],
-    metrics: dict[str, Any],
-    funnel: dict[str, Any],
-    heatmap: dict[str, Any],
-    anomalies: dict[str, Any],
-    business_insights: dict[str, Any] | None = None,
-    staff_analysis: dict[str, Any] | None = None,
-) -> None:
-    st.markdown('<div class="tech-panel-wrap">', unsafe_allow_html=True)
-    st.markdown(
-        """
-        <div class="tech-panel-header">
-            <span class="tech-panel-icon" aria-hidden="true">🗄️</span>
-            <div>
-                <h3>Technical Details (For Judges &amp; Reviewers)</h3>
-                <p>Use this section to verify dashboard values against API payloads
-                and analytics outputs.</p>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    tab_m, tab_f, tab_hm, tab_a, tab_h, tab_bi, tab_staff = st.tabs(
-        [
-            "Metrics API",
-            "Funnel API",
-            "Heatmap API",
-            "Anomalies API",
-            "Health API",
-            "Business Context",
-            "Staff API",
-        ]
-    )
-    with tab_m:
-        st.caption("GET /stores/{store_id}/metrics")
-        st.json(metrics)
-    with tab_f:
-        st.caption("GET /stores/{store_id}/funnel")
-        st.json(funnel)
-    with tab_hm:
-        st.caption("GET /stores/{store_id}/heatmap")
-        st.json(heatmap)
-    with tab_a:
-        st.caption("GET /stores/{store_id}/anomalies")
-        st.json(anomalies)
-    with tab_h:
-        st.caption("GET /health")
-        st.json(health)
-    with tab_bi:
-        st.caption("GET /stores/{store_id}/business-insights")
-        if business_insights:
-            st.markdown(
-                f"**Source:** `{business_insights.get('source', 'fallback')}`"
-            )
-            st.markdown("**Aggregated analytics context (sent to LLM)**")
-            st.json(business_insights.get("context", {}))
-            st.markdown("**Generated insight payload**")
-            st.json(business_insights.get("insights", {}))
-        else:
-            st.info(
-                "Business insights were not loaded. Narrative sections use local fallback text."
-            )
-    with tab_staff:
-        st.caption("GET /stores/{store_id}/staff-analysis")
-        if staff_analysis:
-            st.json(staff_analysis)
-        else:
-            st.info("Staff analysis was not loaded for this store and date.")
-    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def main() -> None:
     st.set_page_config(
-        page_title="Retail Intelligence",
+        page_title="Purpple Vision",
         page_icon="📊",
         layout="wide",
         initial_sidebar_state="expanded",
     )
-    inject_styles()
+    inject_saas_styles()
 
     with st.sidebar:
-        st.markdown("### Store dashboard")
-        st.caption("Daily performance for retail managers")
+        st.markdown(sidebar_brand_html(), unsafe_allow_html=True)
 
         store_options = dashboard_store_options()
         store_labels = [option.label for option in store_options]
@@ -1521,19 +815,20 @@ def main() -> None:
         except StopIteration:
             pass
 
-        selected_label = st.selectbox("Store", store_labels, index=default_index)
+        st.markdown('<div class="glass-panel"><div class="gp-label">Store</div></div>', unsafe_allow_html=True)
+        selected_label = st.selectbox("Store location", store_labels, index=default_index, label_visibility="collapsed")
         store_option = label_to_option[selected_label]
         store_id = store_option.store_id
         store_key = store_option.store_key
 
         available_dates = list_event_dates_from_db(
-            store_option.validation_db,
+            store_option.database_path,
             store_option.store_id,
         )
         if not available_dates:
             st.error(
-                f"No events in {store_option.validation_db.name}. "
-                f"Run: python scripts/demo_validation_run.py --store {store_key}"
+                f"No events in {store_option.database_path.name}. "
+                f"Run: {missing_database_hint(store_option)}"
             )
             st.stop()
 
@@ -1551,18 +846,18 @@ def main() -> None:
             st.session_state.metric_date_iso = preferred_default.isoformat()
 
         date_index = date_labels.index(st.session_state.metric_date_iso)
-        selected_date_iso = st.selectbox("Trading day", date_labels, index=date_index)
+        st.markdown('<div class="glass-panel"><div class="gp-label">Trading day</div></div>', unsafe_allow_html=True)
+        selected_date_iso = st.selectbox("Date", date_labels, index=date_index, label_visibility="collapsed")
         st.session_state.metric_date_iso = selected_date_iso
         st.session_state.store_key = store_key
         selected_date = date.fromisoformat(selected_date_iso)
         date_param = selected_date_iso
 
-        data_mode = "API" if use_api_client() else "Validation DB"
-        st.caption(f"Data source: {data_mode}")
         if use_api_client():
+            st.caption("Data source: API")
             st.caption(f"API: {api_base_url_for_store(store_key)}")
             st.caption(
-                "Set the API server DATABASE_URL to match the selected store validation DB."
+                "Set the API server DATABASE_URL to match the selected store database."
             )
         else:
             try:
@@ -1570,18 +865,15 @@ def main() -> None:
             except FileNotFoundError as exc:
                 st.error(str(exc))
                 st.stop()
-            st.caption(f"Database: {store_option.validation_db.name}")
+            if store_option.is_intelligence_db:
+                st.caption(f"Database: {store_option.database_path.name}")
+            else:
+                st.caption("Data source: Validation DB")
+                st.caption(f"Database: {store_option.database_path.name}")
 
         if st.button("Refresh", type="primary", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
-
-    st.markdown(
-        f'<div class="page-header"><h1>Retail Intelligence</h1>'
-        f'<p class="page-meta">{selected_label} · {store_id} · '
-        f'{selected_date.strftime("%d %b %Y")}</p></div>',
-        unsafe_allow_html=True,
-    )
 
     params = {"date": date_param}
     staff_analysis: dict[str, Any] | None = None
@@ -1680,17 +972,54 @@ def main() -> None:
     top_areas, attention_zone = split_zone_performance(ranked)
     top_zone = top_areas[0]["zone_id"] if top_areas else (ranked[0]["zone_id"] if ranked else "—")
     weak_zone = attention_zone["zone_id"] if attention_zone else "—"
-    render_store_summary(
-        store_id=store_id,
-        selected_date=selected_date,
+
+    _, store_css = store_status_label(health, bool(health.get("database_available", False)))
+    header_status = (
+        "All systems operational"
+        if store_css == "ok"
+        else ("Partial degradation" if store_css == "warn" else "Attention required")
+    )
+    st.markdown(
+        hero_header_html(
+            selected_label,
+            store_id,
+            selected_date,
+            visitors=unique_visitors,
+            revenue_text=format_inr(total_revenue_inr),
+            conversion_text=format_pct(conversion_rate),
+            status_label=header_status,
+            status_css=store_css,
+        ),
+        unsafe_allow_html=True,
+    )
+
+    insight_data = (business_insights or {}).get("insights") or {}
+    store_summary = str(insight_data.get("store_summary") or "").strip()
+    manager_actions = insight_data.get("manager_actions") or []
+    if not store_summary:
+        store_summary = (
+            f"{unique_visitors:,} customers visited on "
+            f"{selected_date.strftime('%d %b %Y')} at {store_id}."
+        )
+    if not manager_actions:
+        manager_actions = [
+            "Review checkout staffing during peak hours.",
+            "Walk the store path from entrance to till.",
+            "Refresh displays in the lowest-performing product area.",
+        ]
+    manager_actions = dedupe_action_items([str(x) for x in manager_actions])
+
+    render_executive_metrics(
         unique_visitors=unique_visitors,
         purchase_count=purchase_count,
-        total_revenue_inr=total_revenue_inr,
+        revenue_text=format_inr(total_revenue_inr),
+        conversion_text=format_pct(conversion_rate),
+        top_zone=friendly_zone(top_zone),
+        weak_zone=friendly_zone(weak_zone),
         conversion_rate=conversion_rate,
-        top_zone=top_zone,
-        weak_zone=weak_zone,
-        insights_payload=business_insights,
     )
+    render_todays_story(store_summary, conversion_rate)
+    render_recommended_actions(manager_actions)
 
     if total_sessions == 0:
         st.warning(
@@ -1698,49 +1027,103 @@ def main() -> None:
             "Choose another date or confirm the store was open."
         )
     else:
-        render_funnel_sankey(funnel)
-        render_zone_intelligence(ranked)
+        render_customer_journey(
+            funnel,
+            stage_count_fn=funnel_stage_count,
+            funnel_drop_offs_fn=funnel_drop_offs,
+            format_pct_fn=format_pct,
+        )
+        render_floor_intelligence(
+            ranked,
+            friendly_zone_fn=friendly_zone,
+            format_dwell_fn=format_dwell_ms,
+        )
         checkout = build_checkout_performance(
             peak_queue_depth=peak_queue_depth,
             queue_abandonment=queue_abandonment,
             reached_checkout_count=reached_checkout_count,
             completed_purchase_count=completed_purchase_count,
         )
-        render_checkout_performance(
-            checkout,
+        checkout_insight = (business_insights or {}).get("insights") or {}
+        checkout_summary = str(checkout_insight.get("checkout_summary") or "").strip()
+        checkout_actions = checkout_insight.get("checkout_actions") or []
+        if not checkout_summary and checkout.headline:
+            checkout_summary = checkout.headline
+        render_checkout_command_center(
             peak_queue_depth=peak_queue_depth,
             queue_abandonment=queue_abandonment,
+            queue_abandonment_text=format_pct(queue_abandonment),
             reached_checkout_count=reached_checkout_count,
             completed_purchase_count=completed_purchase_count,
-            insights_payload=business_insights,
+            checkout_status_pill_fn=checkout_status_pill,
+            checkout_summary=checkout_summary,
+            checkout_actions=dedupe_action_items([str(x) for x in checkout_actions]),
+            checkout_bullets=checkout.bullets,
         )
 
-    render_business_insight_signals(business_insights)
+    render_ai_insights(business_insights)
 
     events_processed = estimate_events_processed(heatmap, total_sessions, funnel)
     has_confidence = bool(heatmap.get("data_confidence", False))
 
-    render_store_monitoring(
-        health,
-        store_id,
-        heatmap,
-        unique_visitors=unique_visitors,
-        total_sessions=total_sessions,
+    feed = store_feed_status(health, store_id)
+    feed_stale = bool(feed.get("stale", False)) if feed else False
+    db_ok = bool(health.get("database_available", False))
+    last_activity = format_utc_timestamp(feed.get("last_event_at") if feed else None)
+    _, store_css = store_status_label(health, db_ok)
+    _, analytics_css = analytics_status_label(db_ok, feed_stale)
+    _, camera_css = camera_activity_label(feed_stale)
+    _, confidence_sub, confidence_css = data_confidence_display(
+        unique_visitors,
+        has_confidence,
         events_processed=events_processed,
-        pos_transactions=purchase_count,
-        queue_depth=queue_depth,
-        avg_dwell_ms=avg_session_dwell_ms,
     )
-    render_data_verification(
+    store_display = "Operational" if store_css == "ok" else (
+        "Degraded" if store_css == "warn" else "Issue"
+    )
+    analytics_display = "Operational" if analytics_css == "ok" else (
+        "Degraded" if analytics_css == "warn" else "Issue"
+    )
+    camera_display = "Operational" if camera_css == "ok" else (
+        "Degraded" if camera_css == "warn" else "Issue"
+    )
+    confidence_display = "Operational" if confidence_css == "ok" else (
+        "Degraded" if confidence_css == "warn" else "Issue"
+    )
+    facts = [
+        f"Visitors analyzed: {unique_visitors:,}",
+        f"Sessions created: {total_sessions:,}",
+        f"Events processed: {events_processed:,}",
+        f"POS transactions: {purchase_count:,}",
+        f"Last activity timestamp: {last_activity}",
+    ]
+    if queue_depth > 0:
+        facts.append(f"Customers waiting at checkout: {queue_depth:,}")
+    facts.append(f"Typical time in store: {format_dwell_ms(avg_session_dwell_ms)}")
+
+    render_operations_monitoring(
+        store_display=store_display,
+        store_css=store_css,
+        analytics_display=analytics_display,
+        analytics_css=analytics_css,
+        camera_display=camera_display,
+        camera_css=camera_css,
+        confidence_display=confidence_display,
+        confidence_css=confidence_css,
+        confidence_sub=confidence_sub,
+        last_activity=last_activity,
+        facts=facts,
+    )
+    render_trust_center(
         unique_visitors=unique_visitors,
         total_sessions=total_sessions,
         events_processed=events_processed,
         pos_transactions=purchase_count,
-        total_revenue_inr=total_revenue_inr,
+        revenue_text=format_inr(total_revenue_inr),
         api_loaded=True,
         has_confidence=has_confidence,
     )
-    render_technical_details(
+    render_technical_panel(
         health=health,
         metrics=metrics,
         funnel=funnel,
