@@ -6,6 +6,8 @@
 
 **Submission runbook:** [docs/SUBMISSION.md](docs/SUBMISSION.md) (all commands reviewers need)
 
+**Important for judges:** Databases and large tracking videos are **not** in git. After clone, run `python scripts/demo_validation_run.py --store all` and/or `python scripts/demo_runner.py` per store, then start Streamlit. Details: [docs/SUBMISSION.md](docs/SUBMISSION.md).
+
 ---
 
 ## Problem Statement
@@ -58,7 +60,7 @@ Purpple_Vision/
 │   ├── cctv/                    # Footage (not committed)
 │   ├── pos/                     # Brigade POS CSV
 │   ├── outputs/pipeline/        # Generated JSONL + tracking MP4
-│   └── databases/               # SQLite (four demo DBs may be committed)
+│   └── databases/               # SQLite (generated locally; gitignored)
 └── docs/
     ├── SUBMISSION.md            # Hackathon / reviewer commands
     └── PROJECT_STATUS.md
@@ -72,18 +74,22 @@ Purpple_Vision/
 - **`pip install -r requirements.txt`**
 - **`models/yolo11m.pt`** (YOLO weights; not in git)
 - **`data/cctv/`** footage (only to regenerate pipeline; not in git)
-- **FFmpeg** — required for in-browser playback of `cam*_tracking.mp4` on **store1_real** / **store2_real**  
-  Windows: `choco install ffmpeg -y` or `winget install --id Gyan.FFmpeg -e`
-
 ---
 
 ## Quick start — dashboard (recommended for demo video)
 
+**Step 1 — create databases** (required on a fresh clone):
+
 ```powershell
-cd Purpple_Vision
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+python scripts/demo_validation_run.py --store all
+$env:PURPPLE_STORE = "store_1"; python scripts/demo_runner.py
+$env:PURPPLE_STORE = "store_2"; python scripts/demo_runner.py
+```
+
+**Step 2 — run Streamlit:**
+
+```powershell
 streamlit run dashboard/streamlit_app.py
 ```
 
@@ -207,9 +213,12 @@ pytest --cov=app
 
 ---
 
-## SQLite databases (not in git)
+## Databases and videos (not in git)
 
-All `*.db` files are **gitignored**. Reviewers generate them locally with `demo_validation_run.py` and `demo_runner.py` (see [docs/SUBMISSION.md](docs/SUBMISSION.md)).
+- **SQLite** (`data/databases/*.db`) — gitignored; create with `demo_validation_run.py` and `demo_runner.py`.
+- **Tracking MP4** (`data/outputs/pipeline/**/*_tracking.mp4`) — gitignored (too large for GitHub); produced by `demo_runner.py`. **store1_real** uses a still frame from these files; **store2_real** is metrics-only.
+
+Full reviewer steps: [docs/SUBMISSION.md](docs/SUBMISSION.md).
 
 ---
 
