@@ -21,9 +21,12 @@ from app.db import (
 )
 from app.models import StoreMetricsResponse, ZoneDwellMetric
 from app.pos_correlation import converted_visitor_ids
+from app.staff_detection import (
+    build_sessions_for_analytics,
+    is_customer_visitor,
+)
 from app.sessions import (
     VisitorSession,
-    build_sessions,
     count_unique_visitors,
     customer_sessions,
 )
@@ -97,7 +100,10 @@ def compute_average_dwell_by_zone(
     ]
 
 
-def compute_current_queue_depth(events: Sequence[EventRecord]) -> int:
+def compute_current_queue_depth(
+    events: Sequence[EventRecord],
+    staff_ids: frozenset[str] | None = None,
+) -> int:
     """
     Latest non-staff billing queue depth for the event window.
 
@@ -107,7 +113,11 @@ def compute_current_queue_depth(events: Sequence[EventRecord]) -> int:
     latest: EventRecord | None = None
 
     for event in events:
-        if event.event_type != "BILLING_QUEUE_JOIN" or event.is_staff:
+        if event.event_type != "BILLING_QUEUE_JOIN":
+            continue
+        if staff_ids is not None and not is_customer_visitor(event.visitor_id, staff_ids):
+            continue
+        if staff_ids is None and event.is_staff:
             continue
         if latest is None or event.timestamp > latest.timestamp:
             latest = event
@@ -148,7 +158,7 @@ def compute_store_metrics(
     transactions: list[PosTransactionRecord],
 ) -> StoreMetricsResponse:
     """Derive PDF metrics from events and POS rows for one store and UTC day."""
-    sessions = build_sessions(events)
+    sessions, _, staff_ids = build_sessions_for_analytics(events)
     customers = customer_sessions(sessions)
 
     total_revenue_inr = sum(
@@ -162,7 +172,7 @@ def compute_store_metrics(
         conversion_rate=compute_conversion_rate(sessions, transactions),
         average_dwell_time_ms=compute_average_dwell_time_ms(sessions),
         average_dwell_by_zone=compute_average_dwell_by_zone(sessions),
-        current_queue_depth=compute_current_queue_depth(events),
+        current_queue_depth=compute_current_queue_depth(events, staff_ids),
         queue_abandonment_rate=compute_queue_abandonment_rate(sessions),
         billing_reach_rate=compute_billing_reach_rate(sessions),
         total_sessions=len(customers),

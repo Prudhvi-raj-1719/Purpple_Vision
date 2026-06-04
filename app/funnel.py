@@ -21,9 +21,8 @@ from app.db import (
 from app.metrics import parse_metric_date
 from app.models import FunnelStage, StoreFunnelResponse
 from app.pos_correlation import converted_visitor_ids
+from app.staff_detection import build_sessions_for_analytics
 from app.sessions import (
-    VisitorSession,
-    build_sessions,
     count_unique_visitors,
     customer_sessions,
 )
@@ -126,7 +125,7 @@ def compute_store_funnel(
     transactions: list[PosTransactionRecord],
 ) -> StoreFunnelResponse:
     """Derive visitor-level funnel from events and POS rows for one UTC day."""
-    sessions = build_sessions(events)
+    sessions, _, _staff_ids = build_sessions_for_analytics(events)
 
     unique_visitors = count_unique_visitors(sessions)
     zone_count = len(visitors_reached_any_zone(sessions))

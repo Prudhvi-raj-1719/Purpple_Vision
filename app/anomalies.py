@@ -23,7 +23,15 @@ from app.heatmap import aggregate_zone_stats, build_heatmap_zones
 from app.metrics import compute_conversion_rate, parse_metric_date
 from app.models import Anomaly, AnomalySeverity, HeatmapZone, StoreAnomaliesResponse
 from app.pos_correlation import converted_visitor_ids
-from app.sessions import build_sessions, count_unique_visitors, customer_sessions
+from app.staff_detection import (
+    build_sessions_for_analytics,
+    count_customer_queue_joins,
+)
+from app.sessions import (
+    BILLING_ZONE_ID,
+    count_unique_visitors,
+    customer_sessions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -84,13 +92,12 @@ def _anomaly_detected_at(detected_at: datetime | None) -> datetime:
     return datetime.now(timezone.utc)
 
 
-def count_non_staff_queue_joins(events: Sequence[EventRecord]) -> int:
+def count_non_staff_queue_joins(
+    events: Sequence[EventRecord],
+    staff_ids: frozenset[str],
+) -> int:
     """Count BILLING_QUEUE_JOIN events excluding staff detections."""
-    return sum(
-        1
-        for event in events
-        if event.event_type == "BILLING_QUEUE_JOIN" and not event.is_staff
-    )
+    return count_customer_queue_joins(events, staff_ids)
 
 
 def detect_queue_spike(
@@ -210,6 +217,8 @@ def detect_dead_zones(
     when = _anomaly_detected_at(detected_at)
     anomalies: list[Anomaly] = []
     for zone in zones:
+        if zone.zone_id.upper() == BILLING_ZONE_ID:
+            continue
         score = zone.normalized_score
         if score < DEAD_ZONE_CRITICAL_SCORE:
             anomalies.append(
@@ -266,8 +275,8 @@ def detect_store_anomalies(
     detected_at: datetime | None = None,
 ) -> list[Anomaly]:
     """Run all anomaly detectors and return ordered results."""
-    sessions = build_sessions(events)
-    queue_joins = count_non_staff_queue_joins(events)
+    sessions, _classifications, staff_ids = build_sessions_for_analytics(events)
+    queue_joins = count_non_staff_queue_joins(events, staff_ids)
     aggregates = aggregate_zone_stats(sessions)
     heatmap_zones = build_heatmap_zones(aggregates)
 

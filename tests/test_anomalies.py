@@ -31,6 +31,7 @@ from app.anomalies import (
     detect_queue_spike,
     detect_store_anomalies,
 )
+from app.staff_detection import build_sessions_for_analytics
 from app.db import EventRecord, PosTransactionRecord, get_session
 from app.models import AnomalySeverity, HeatmapZone
 
@@ -162,7 +163,8 @@ class TestQueueSpikeDetection:
             _queue_join_event("e1", 14, is_staff=True),
             _queue_join_event("e2", 14, minute=1, visitor_id="VIS_cust", is_staff=False),
         ]
-        assert count_non_staff_queue_joins(events) == 1
+        _, _, staff_ids = build_sessions_for_analytics(events)
+        assert count_non_staff_queue_joins(events, staff_ids) == 1
 
 
 class TestConversionDropDetection:

@@ -301,12 +301,11 @@ class TestHeatmapComputation:
 
         assert result.store_id == STORE
         assert result.date == DAY
-        assert set(zones) == {"BILLING", "SKINCARE"}
+        # BILLING is excluded from engagement heatmap (checkout uses queue metrics).
+        assert set(zones) == {"SKINCARE"}
 
         # SKINCARE: visit=1, dwell=60000 -> score = 1 + 60 = 61
-        # BILLING: visit=1, dwell=30000 -> score = 1 + 30 = 31
         assert zones["SKINCARE"]["normalized_score"] == 100.0
-        assert zones["BILLING"]["normalized_score"] == (31 / 61) * 100
         assert zones["SKINCARE"]["visit_count"] == 1
         assert zones["SKINCARE"]["total_dwell_time_ms"] == 60_000
 

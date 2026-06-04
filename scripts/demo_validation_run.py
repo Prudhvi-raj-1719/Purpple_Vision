@@ -24,6 +24,7 @@ POS_PATH = SYNTHETIC_DIR / "demo_pos.csv"
 
 STORE_ID = "STORE_BLR_002"
 METRIC_DATE = date(2026, 6, 1)
+INGEST_BATCH_SIZE = 500
 
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -136,6 +137,23 @@ def reset_validation_database() -> Path:
     return database_used
 
 
+def ingest_events_in_batches(events: list[dict]) -> tuple[int, int, int, list[str]]:
+    """Ingest events in API-sized chunks (max 500 per request)."""
+    ingested = 0
+    duplicates = 0
+    rejected = 0
+    errors: list[str] = []
+    for offset in range(0, len(events), INGEST_BATCH_SIZE):
+        batch = events[offset : offset + INGEST_BATCH_SIZE]
+        status = ingest_event_dicts(batch)
+        ingested += status.events_ingested
+        duplicates += status.duplicates_skipped
+        rejected += status.rejected
+        for err in status.errors:
+            errors.append(f"event[{offset + err.index}]: {err.error}")
+    return ingested, duplicates, rejected, errors
+
+
 def run_validation() -> ValidationSummary:
     summary = ValidationSummary()
 
@@ -150,14 +168,11 @@ def run_validation() -> ValidationSummary:
 
     events = load_events(EVENTS_PATH)
     summary.events_loaded = len(events)
-    event_status = ingest_event_dicts(events)
-    summary.events_ingested = event_status.events_ingested
-    summary.events_duplicates = event_status.duplicates_skipped
-    summary.events_rejected = event_status.rejected
-    if event_status.errors:
-        summary.errors.extend(
-            f"event[{e.index}]: {e.error}" for e in event_status.errors
-        )
+    ingested, duplicates, rejected, ingest_errors = ingest_events_in_batches(events)
+    summary.events_ingested = ingested
+    summary.events_duplicates = duplicates
+    summary.events_rejected = rejected
+    summary.errors.extend(ingest_errors)
 
     pos_rows = load_pos_rows(POS_PATH)
     summary.pos_loaded = len(pos_rows)

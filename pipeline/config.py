@@ -38,6 +38,7 @@ CAMERA_CLIP_START: Dict[str, str] = {
     "CAM1": "2026-04-10 20:10:27",
     "CAM2": "2026-04-10 20:10:02",
     "CAM3": "2026-04-10 20:10:15",
+    "CAM4": "2026-04-10 20:10:10",
     "CAM5": "2026-04-10 20:09:48",
 }
 
@@ -45,6 +46,7 @@ CAMERA_VIDEO_FILES: Dict[str, Path] = {
     "CAM1": CCTV_DIR / "CAM 1.mp4",
     "CAM2": CCTV_DIR / "CAM 2.mp4",
     "CAM3": CCTV_DIR / "CAM 3.mp4",
+    "CAM4": CCTV_DIR / "CAM 4.mp4",
     "CAM5": CCTV_DIR / "CAM 5.mp4",
 }
 
@@ -52,6 +54,7 @@ CAMERA_PURPPLE_IDS: Dict[str, str] = {
     "CAM1": "CAM_SHELF_01",
     "CAM2": "CAM_SHELF_02",
     "CAM3": "CAM_ENTRY_01",
+    "CAM4": "CAM_STAFF_01",
     "CAM5": "CAM_BILLING_01",
 }
 

@@ -1,5 +1,5 @@
 """
-End-to-end demo: run CAM1, CAM2, CAM3, and CAM5 migrated pipelines.
+End-to-end demo: run CAM1, CAM2, CAM3, CAM4 (robustness), and CAM5 pipelines.
 
 Orchestrates existing processors only (no business-logic changes).
 Writes a summary report to data/outputs/pipeline/pipeline_demo_report.txt.
@@ -22,6 +22,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from pipeline.cam1_processor import CAMERA_KEY as CAM1_KEY, process_cam1_video
 from pipeline.cam2_processor import CAMERA_KEY as CAM2_KEY, process_cam2_video
+from pipeline.cam4_processor import CAMERA_KEY as CAM4_KEY, process_cam4_video
 from pipeline.config import DEFAULT_STORE_ID, OUTPUT_DIR, parse_clip_start
 from pipeline.emit import EmitStats, PipelineEmitter
 from pipeline.entry_exit import CAMERA_KEY as CAM3_KEY, process_cam3_video
@@ -50,6 +51,7 @@ class CameraRunResult:
     notbk_mirror_path: Path
     emitter_stats: EmitStats
     event_counts: Counter[str] = field(default_factory=Counter)
+    persons_detected: int | None = None
     error: str | None = None
 
 
@@ -114,9 +116,11 @@ def run_camera_pipeline(
             store_id=DEFAULT_STORE_ID,
             clip_start_by_camera={camera_key: clip_start},
         ) as emitter:
-            process_fn(emitter=emitter, show_window=False)
+            proc_stats = process_fn(emitter=emitter, show_window=False)
             result.emitter_stats = emitter.stats
             result.notbk_mirror_path = emitter.notbk_mirror_path
+            if hasattr(proc_stats, "persons_detected"):
+                result.persons_detected = int(proc_stats.persons_detected)
     except Exception as exc:
         result.error = f"{type(exc).__name__}: {exc}"
         logger.exception("%s pipeline failed", camera_key)
@@ -126,6 +130,18 @@ def run_camera_pipeline(
     if not result.event_counts and out_path.is_file():
         result.event_counts = count_purpple_jsonl_by_type(out_path)
     return result
+
+
+def format_cam4_robustness_block(lines: list[str], result: CameraRunResult) -> None:
+    """Report CAM4 detection-only metrics (no business events)."""
+    persons = result.persons_detected if result.persons_detected is not None else 0
+    events = sum(result.event_counts.values())
+    status = f"FAILED — {result.error}" if result.error else "OK"
+    lines.append("CAM4:")
+    lines.append(f"  Persons detected: {persons}")
+    lines.append(f"  Events generated: {events}")
+    lines.append(f"  Status: {status}")
+    lines.append("")
 
 
 def format_type_block(
@@ -176,7 +192,7 @@ def build_report(results: list[CameraRunResult]) -> str:
     lines.append(f"Adaptation errors: {adaptation_errors}")
     lines.append("")
     lines.append("Events by camera:")
-    for camera_key in (CAM1_KEY, CAM2_KEY, CAM3_KEY, CAM5_KEY):
+    for camera_key in (CAM1_KEY, CAM2_KEY, CAM3_KEY, CAM4_KEY, CAM5_KEY):
         cam_total = sum(by_camera.get(camera_key, Counter()).values())
         lines.append(f"  {camera_key}: {cam_total}")
     lines.append("")
@@ -198,6 +214,10 @@ def build_report(results: list[CameraRunResult]) -> str:
     cam3 = by_camera.get(CAM3_KEY, Counter())
     format_type_block(lines, "CAM3", CAM3_TYPES, cam3)
 
+    cam4_result = next((r for r in results if r.camera_key == CAM4_KEY), None)
+    if cam4_result is not None:
+        format_cam4_robustness_block(lines, cam4_result)
+
     cam5 = by_camera.get(CAM5_KEY, Counter())
     format_type_block(lines, "CAM5", CAM5_TYPES, cam5)
 
@@ -212,6 +232,8 @@ def build_report(results: list[CameraRunResult]) -> str:
             f"written={result.emitter_stats.purpple_written} "
             f"errors={result.emitter_stats.adaptation_errors}"
         )
+        if result.camera_key == CAM4_KEY and result.persons_detected is not None:
+            lines.append(f"  persons_detected: {result.persons_detected}")
         if result.error:
             total_errors += 1
             lines.append(f"  status: FAILED — {result.error}")
@@ -240,6 +262,7 @@ def main() -> int:
         (CAM1_KEY, "cam1_events.jsonl", process_cam1_video),
         (CAM2_KEY, "cam2_events.jsonl", process_cam2_video),
         (CAM3_KEY, "cam3_events.jsonl", process_cam3_video),
+        (CAM4_KEY, "cam4_events.jsonl", process_cam4_video),
         (CAM5_KEY, "cam5_events.jsonl", process_cam5_video),
     ]
 
@@ -250,6 +273,13 @@ def main() -> int:
         results.append(result)
         if result.error:
             logger.error("%s failed: %s", camera_key, result.error)
+        elif camera_key == CAM4_KEY:
+            logger.info(
+                "%s done: persons_detected=%s events=%s",
+                camera_key,
+                result.persons_detected,
+                sum(result.event_counts.values()),
+            )
         else:
             logger.info(
                 "%s done: %s events (%s Purpple written)",

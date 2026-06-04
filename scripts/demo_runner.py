@@ -8,7 +8,8 @@ Pipeline:
   1) CAM1 processor
   2) CAM2 processor
   3) CAM3 processor (entry/exit)
-  4) CAM5 processor (billing queue)
+  4) CAM4 processor (robustness — detection only, no events)
+  5) CAM5 processor (billing queue)
   5) POS loader (aggregate Brigade CSV -> Purpple POS CSV)
   6) Purchase matching (offline)
   7) Bridge pipeline outputs -> product DB (ingest + analytics compute)
@@ -59,6 +60,7 @@ delete_sqlite_database(DEMO_PRODUCT_DB)
 
 from pipeline.cam1_processor import CAMERA_KEY as CAM1_KEY, process_cam1_video  # noqa: E402
 from pipeline.cam2_processor import CAMERA_KEY as CAM2_KEY, process_cam2_video  # noqa: E402
+from pipeline.cam4_processor import CAMERA_KEY as CAM4_KEY, process_cam4_video  # noqa: E402
 from pipeline.config import (  # noqa: E402
     DEFAULT_STORE_ID,
     OUTPUT_DIR,
@@ -129,6 +131,7 @@ class CameraRun:
     event_counts: Counter[str] = field(default_factory=Counter)
     error: str | None = None
     elapsed_s: float = 0.0
+    persons_detected: int | None = None
 
 
 def _count_jsonl_event_types(path: Path) -> Counter[str]:
@@ -170,9 +173,11 @@ def _run_camera(
             store_id=DEFAULT_STORE_ID,
             clip_start_by_camera={camera_key: clip_start},
         ) as emitter:
-            process_fn(emitter=emitter, show_window=False)
+            proc_stats = process_fn(emitter=emitter, show_window=False)
             result.emitter_stats = emitter.stats
             result.notbk_mirror_path = emitter.notbk_mirror_path
+            if hasattr(proc_stats, "persons_detected"):
+                result.persons_detected = int(proc_stats.persons_detected)
     except Exception as exc:  # noqa: BLE001 (demo orchestration)
         result.error = f"{type(exc).__name__}: {exc}"
     finally:
@@ -258,6 +263,23 @@ def _write_report(
             "",
         ]
     )
+
+    cam4_runs = [r for r in camera_runs if r.camera_key == CAM4_KEY]
+    if cam4_runs:
+        lines.extend(["### CAM4 robustness (detection only)", ""])
+        for run in cam4_runs:
+            persons = run.persons_detected if run.persons_detected is not None else 0
+            events = sum(run.event_counts.values())
+            status = f"FAILED ({run.error})" if run.error else "OK"
+            lines.extend(
+                [
+                    "CAM4:",
+                    f"- Persons detected: **{persons}**",
+                    f"- Events generated: **{events}**",
+                    f"- Status: **{status}**",
+                    "",
+                ]
+            )
 
     lines.extend(["## 2. POS loader", ""])
     if pos_summary is None:
@@ -350,6 +372,7 @@ def main() -> int:
         (CAM1_KEY, "cam1_events.jsonl", process_cam1_video),
         (CAM2_KEY, "cam2_events.jsonl", process_cam2_video),
         (CAM3_KEY, "cam3_events.jsonl", process_cam3_video),
+        (CAM4_KEY, "cam4_events.jsonl", process_cam4_video),
         (CAM5_KEY, "cam5_events.jsonl", process_cam5_video),
     ]
     camera_runs: list[CameraRun] = []

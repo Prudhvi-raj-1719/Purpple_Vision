@@ -35,7 +35,7 @@ pandas==2.2.3             # POS CSV aggregation (pos_loader); Streamlit charts
 
 # --- Dashboard ---
 streamlit==1.41.1         # dashboard/streamlit_app.py
-
+plotly==5.24.1            # dashboard charts (Sankey, zones, gauges)
 # --- Testing (evaluator / CI; included in main for one-command setup) ---
 pytest==8.3.4
 pytest-cov==6.0.0

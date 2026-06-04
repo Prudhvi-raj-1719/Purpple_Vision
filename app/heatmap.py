@@ -14,7 +14,12 @@ from sqlalchemy.orm import Session
 from app.db import EventRecord, fetch_store_events, get_db, is_database_available
 from app.metrics import parse_metric_date
 from app.models import HeatmapZone, StoreHeatmapResponse
-from app.sessions import VisitorSession, build_sessions, customer_sessions
+from app.staff_detection import build_sessions_for_analytics
+from app.sessions import (
+    BILLING_ZONE_ID,
+    VisitorSession,
+    customer_sessions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,17 +55,25 @@ class ZoneAggregate:
         return self.visit_count + (self.total_dwell_time_ms / DWELL_MS_TO_ENGAGEMENT_SECONDS)
 
 
+def is_product_zone(zone_id: str) -> bool:
+    """Product/browse zones only — checkout (BILLING) uses queue metrics elsewhere."""
+    return zone_id.upper() != BILLING_ZONE_ID
+
+
 def aggregate_zone_stats(sessions: Sequence[VisitorSession]) -> dict[str, ZoneAggregate]:
     """
     Build per-zone stats from customer sessions.
 
     Each session contributes at most one visit per zone (from zones_visited).
     Dwell is summed from session.total_dwell_ms_by_zone.
+    BILLING is excluded; checkout is measured via queue and conversion metrics.
     """
     aggregates: dict[str, ZoneAggregate] = {}
 
     for session in customer_sessions(sessions):
         for zone_id in session.zones_visited:
+            if not is_product_zone(zone_id):
+                continue
             zone = aggregates.setdefault(zone_id, ZoneAggregate())
             zone.visit_count += 1
             zone.unique_visitor_ids.add(session.visitor_id)
@@ -128,7 +141,7 @@ def compute_store_heatmap(
     events: list[EventRecord],
 ) -> StoreHeatmapResponse:
     """Derive zone heatmap from events for one store and UTC day."""
-    sessions = build_sessions(events)
+    sessions, _, _staff_ids = build_sessions_for_analytics(events)
     aggregates = aggregate_zone_stats(sessions)
 
     return StoreHeatmapResponse(

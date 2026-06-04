@@ -16,11 +16,14 @@ from app.health import router as health_router
 from app.ingestion import router as ingestion_router
 from app.pos_ingestion import router as pos_ingestion_router
 from app.anomalies import router as anomalies_router
+from app.business_insights import router as business_insights_router
 from app.funnel import router as funnel_router
 from app.heatmap import router as heatmap_router
 from app.logging_config import RequestLoggingMiddleware, configure_logging
 from app.metrics import router as metrics_router
 from app.models import ErrorResponse
+from app.llm_provider import log_ai_insights_startup
+from app.staff_analysis import router as staff_analysis_router
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -31,6 +34,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Application startup and shutdown lifecycle."""
     init_db()
     logger.info("Database initialized")
+    log_ai_insights_startup()
     yield
 
 
@@ -53,6 +57,8 @@ app.include_router(metrics_router)
 app.include_router(funnel_router)
 app.include_router(heatmap_router)
 app.include_router(anomalies_router)
+app.include_router(business_insights_router)
+app.include_router(staff_analysis_router)
 
 
 def _trace_id_from_request(request: Request) -> str | None:

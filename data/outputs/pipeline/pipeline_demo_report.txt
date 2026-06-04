@@ -1,0 +1,87 @@
+Purpple_Vision Pipeline Demo Report
+==================================================
+Generated: 2026-06-01 17:29:42 UTC
+Repo: E:\Purpple_Vision
+Demo outputs: E:\Purpple_Vision\data\outputs\pipeline\pipeline_demo
+
+Overall
+--------------------------------------------------
+Total events generated (NOTEBK rows): 66
+Total Purpple events written: 66
+Adaptation errors: 0
+
+Events by camera:
+  CAM1: 24
+  CAM2: 42
+  CAM3: 0
+  CAM4: 0
+  CAM5: 0
+
+Events by type (all cameras):
+  DWELL_COMPLETED: 22
+  ZONE_ENTER: 22
+  ZONE_EXIT: 22
+
+Per-camera breakdown
+--------------------------------------------------
+
+CAM1:
+  ZONE_ENTER: 8
+  ZONE_EXIT: 8
+  DWELL_COMPLETED: 8
+
+CAM2:
+  ZONE_ENTER: 14
+  ZONE_EXIT: 14
+  DWELL_COMPLETED: 14
+
+CAM3:
+  ENTRY: 0
+  EXIT: 0
+
+CAM4:
+  Persons detected: 0
+  Events generated: 0
+  Status: OK
+
+CAM5:
+  QUEUE_ENTER: 0
+  QUEUE_EXIT: 0
+  PAYMENT_ENTER: 0
+  PAYMENT_EXIT: 0
+  DWELL_COMPLETED: 0
+
+Run details
+--------------------------------------------------
+CAM1:
+  output: E:\Purpple_Vision\data\outputs\pipeline\pipeline_demo\cam1_events.jsonl
+  mirror: E:\Purpple_Vision\data\outputs\pipeline\pipeline_demo\cam1_events.notbk.jsonl
+  emitter: received=24 written=24 errors=0
+  status: OK
+
+CAM2:
+  output: E:\Purpple_Vision\data\outputs\pipeline\pipeline_demo\cam2_events.jsonl
+  mirror: E:\Purpple_Vision\data\outputs\pipeline\pipeline_demo\cam2_events.notbk.jsonl
+  emitter: received=42 written=42 errors=0
+  status: OK
+
+CAM3:
+  output: E:\Purpple_Vision\data\outputs\pipeline\pipeline_demo\cam3_events.jsonl
+  mirror: E:\Purpple_Vision\data\outputs\pipeline\pipeline_demo\cam3_events.notbk.jsonl
+  emitter: received=0 written=0 errors=0
+  status: OK
+
+CAM4:
+  output: E:\Purpple_Vision\data\outputs\pipeline\pipeline_demo\cam4_events.jsonl
+  mirror: E:\Purpple_Vision\data\outputs\pipeline\pipeline_demo\cam4_events.notbk.jsonl
+  emitter: received=0 written=0 errors=0
+  persons_detected: 0
+  status: OK
+
+CAM5:
+  output: E:\Purpple_Vision\data\outputs\pipeline\pipeline_demo\cam5_events.jsonl
+  mirror: E:\Purpple_Vision\data\outputs\pipeline\pipeline_demo\cam5_events.notbk.jsonl
+  emitter: received=0 written=0 errors=0
+  status: OK
+
+All camera pipelines completed successfully.

@@ -1,0 +1,23 @@
+ok so to do so that is get one  object of all analytics and installing this qwen3 4b model and then giving it a prompt not to generate kpis bit to generate  something like {
+
+ "store_summary":"Store traffic was strong today...",
+
+ "manager_actions":[
+
+   "...",
+
+   "...",
+
+   "..."
+
+ ],
+
+ "business_risks":[
+
+   "...",
+
+   "..."
+
+ ]
+
+} and then send its ans as key Insights or suggesiton and pass it to the treamlit before passing it to streamlit i believe the output fromt he llm can be random to give the output of llm a preper structure or format maybe we can us epydantic and say to generate the output in this turcture so that when passed to streamlit , then streamlit will not fail receiveing it to so give a good prompt to cursor to do all this stuff 

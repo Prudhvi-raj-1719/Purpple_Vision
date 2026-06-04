@@ -20,20 +20,20 @@ YES
 
 | Metric | Value |
 |--------|-------|
-| Events loaded | 14 |
-| Events ingested | 14 |
+| Events loaded | 843 |
+| Events ingested | 843 |
 | Event duplicates skipped | 0 |
 | Events rejected | 0 |
-| POS rows loaded | 2 |
-| POS ingested | 2 |
+| POS rows loaded | 68 |
+| POS ingested | 68 |
 | POS duplicates skipped | 0 |
 | POS rejected | 0 |
 
 ## 2. Sessions
 
-- Sessions created: **3** (customer sessions)
-- Total sessions (incl. logic): **3**
-- Unique visitors: **3**
+- Sessions created: **161** (customer sessions)
+- Total sessions (incl. logic): **161**
+- Unique visitors: **130**
 
 ### Visitor journeys
 
@@ -47,30 +47,30 @@ YES
 
 | Metric | Value |
 |--------|-------|
-| unique_visitors | 3 |
-| total_sessions | 3 |
-| conversion_rate | 0.6667 |
-| billing_reach_rate | 0.6667 |
-| queue_abandonment_rate | 0.0000 |
+| unique_visitors | 128 |
+| total_sessions | 153 |
+| conversion_rate | 0.6719 |
+| billing_reach_rate | 0.6797 |
+| queue_abandonment_rate | 0.1442 |
 | current_queue_depth | 1 |
 
 ## 4. Funnel
 
 | Stage | Count | Drop-off % |
 |-------|-------|------------|
-| unique_visitors | 3 | — |
-| reached_any_zone | 3 | 0.0 |
-| billing_queue | 2 | 33.3 |
-| converted_visitors | 2 | 0.0 |
+| unique_visitors | 128 | — |
+| reached_any_zone | 128 | 0.0 |
+| billing_queue | 96 | 25.0 |
+| converted_visitors | 86 | 10.4 |
 
-- Converted visitors: **2**
+- Converted visitors: **86**
 
 ## 5. Conversions & revenue
 
 | Metric | Value |
 |--------|-------|
-| Converted visitors (POS correlation) | 2 |
-| Total POS revenue (INR) | 2,148.50 |
+| Converted visitors (POS correlation) | 86 |
+| Total POS revenue (INR) | 78,272.99 |
 
 POS transactions:
 
@@ -81,8 +81,8 @@ POS transactions:
 
 ## 6. Heatmap & anomalies
 
-- Heatmap zones reported: **4**
-- Anomalies detected: **1**
+- Heatmap zones reported: **17**
+- Anomalies detected: **9**
 
 ## 7. Dashboard verification
 
