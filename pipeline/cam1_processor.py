@@ -8,6 +8,7 @@ from pathlib import Path
 from pipeline.config import parse_clip_start, refresh_store_config
 from pipeline.dwell import ZoneEngagementStats, process_zone_engagement_video
 from pipeline.emit import PipelineEmitter
+from pipeline.shelf_preview import shelf_tracking_output_path
 from pipeline.store_config import (
     StoreConfig,
     resolve_store_config,
@@ -35,6 +36,7 @@ def process_cam1_video(
     if path is None:
         raise FileNotFoundError(f"{cfg.store_key}: no CAM1 video configured")
 
+    tracking_path = shelf_tracking_output_path(cfg.pipeline_output_dir, CAMERA_KEY)
     return process_zone_engagement_video(
         camera_key=CAMERA_KEY,
         zone_definitions=zones_as_legacy_dict(cfg.cam1.zones),
@@ -43,6 +45,8 @@ def process_cam1_video(
         show_window=show_window,
         window_title=f"{cfg.display_name} CAM1 Zone Engagement",
         process_every_n=cfg.cam1.detection.process_every_n_frames,
+        annotated_video_path=tracking_path,
+        min_overlap_pct=cfg.cam1.overlap.min_overlap_pct,
     )
 
 

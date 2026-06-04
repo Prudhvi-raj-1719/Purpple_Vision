@@ -993,8 +993,8 @@ def zone_card_html(zone: dict[str, Any], rank: int, tier: str) -> str:
         f'<div class="zone-card tier-{tier}">'
         f'<div class="zc-rank">#{rank}</div>'
         f'<div class="zc-name">{name}</div>'
-        f'<div class="zc-stat">Visits · {visits:,}</div>'
-        f'<div class="zc-stat">Dwell · {dwell}</div>'
+        f'<div class="zc-stat">Customer visits · {visits:,}</div>'
+        f'<div class="zc-stat">Time spent · {dwell}</div>'
         f'<div class="zone-score-bar"><div style="width:{bar_w}%"></div></div>'
         f"</div>"
     )
@@ -1208,7 +1208,7 @@ def build_zone_floor_heatmap(ranked: list[dict[str, Any]]) -> go.Figure:
             ygap=4,
             showscale=True,
             colorbar=dict(
-                title=dict(text="Interest", font=dict(size=12)),
+                title=dict(text="Customer Interest", font=dict(size=12)),
                 thickness=16,
                 len=0.7,
                 bgcolor="rgba(255,255,255,0.8)",
@@ -1350,8 +1350,8 @@ def render_floor_intelligence(
 
     st.markdown(
         '<div class="heatmap-stats">'
-        f'<span class="stat-chip"><span>Top Interest ·</span> {friendly_zone_fn(str(top.get("zone_id", "")))}</span>'
-        f'<span class="stat-chip"><span>Weakest Area ·</span> {friendly_zone_fn(str(weak.get("zone_id", "")))}</span>'
+        f'<span class="stat-chip"><span>Most visited brand area ·</span> {friendly_zone_fn(str(top.get("zone_id", "")))}</span>'
+        f'<span class="stat-chip"><span>Least visited brand area ·</span> {friendly_zone_fn(str(weak.get("zone_id", "")))}</span>'
         f'<span class="stat-chip"><span>Avg Dwell ·</span> {format_dwell_fn(avg_dwell)}</span>'
         "</div>",
         unsafe_allow_html=True,
@@ -1596,8 +1596,10 @@ def render_technical_panel(
     anomalies: dict[str, Any],
     business_insights: dict[str, Any] | None = None,
     staff_analysis: dict[str, Any] | None = None,
+    expander_title: str = "Technical Details — API payloads & verification",
+    verification_mode: bool = False,
 ) -> None:
-    with st.expander("Technical Details — API payloads & verification", expanded=False):
+    with st.expander(expander_title, expanded=False):
         st.markdown('<div class="tech-dark">', unsafe_allow_html=True)
         st.markdown(
             """
@@ -1611,48 +1613,77 @@ def render_technical_panel(
             """,
             unsafe_allow_html=True,
         )
-        tab_m, tab_f, tab_hm, tab_a, tab_h, tab_bi, tab_staff = st.tabs(
-            [
-                "Metrics",
-                "Funnel",
-                "Heatmap",
-                "Anomalies",
-                "Health",
-                "Business Context",
-                "Staff API",
-            ]
-        )
-        with tab_m:
-            st.caption("GET /stores/{store_id}/metrics")
-            st.json(metrics)
-        with tab_f:
-            st.caption("GET /stores/{store_id}/funnel")
-            st.json(funnel)
-        with tab_hm:
-            st.caption("GET /stores/{store_id}/heatmap")
-            st.json(heatmap)
-        with tab_a:
-            st.caption("GET /stores/{store_id}/anomalies")
-            st.json(anomalies)
-        with tab_h:
-            st.caption("GET /health")
-            st.json(health)
-        with tab_bi:
-            st.caption("GET /stores/{store_id}/business-insights")
-            if business_insights:
-                st.markdown(f"**Source:** `{business_insights.get('source', 'fallback')}`")
-                st.markdown("**Aggregated analytics context (sent to LLM)**")
-                st.json(business_insights.get("context", {}))
-                st.markdown("**Generated insight payload**")
-                st.json(business_insights.get("insights", {}))
-            else:
-                st.info(
-                    "Business insights were not loaded. Narrative sections use local fallback text."
-                )
-        with tab_staff:
-            st.caption("GET /stores/{store_id}/staff-analysis")
-            if staff_analysis:
-                st.json(staff_analysis)
-            else:
-                st.info("Staff analysis was not loaded for this store and date.")
+        if verification_mode:
+            tab_m, tab_f, tab_hm, tab_a, tab_staff = st.tabs(
+                [
+                    "Metrics API",
+                    "Funnel API",
+                    "Heatmap API",
+                    "Anomalies API",
+                    "Staff Detection",
+                ]
+            )
+            with tab_m:
+                st.caption("GET /stores/{store_id}/metrics")
+                st.json(metrics)
+            with tab_f:
+                st.caption("GET /stores/{store_id}/funnel")
+                st.json(funnel)
+            with tab_hm:
+                st.caption("GET /stores/{store_id}/heatmap")
+                st.json(heatmap)
+            with tab_a:
+                st.caption("GET /stores/{store_id}/anomalies")
+                st.json(anomalies)
+            with tab_staff:
+                st.caption("GET /stores/{store_id}/staff-analysis")
+                if staff_analysis:
+                    st.json(staff_analysis)
+                else:
+                    st.info("Staff detection data was not loaded for this store and date.")
+        else:
+            tab_m, tab_f, tab_hm, tab_a, tab_h, tab_bi, tab_staff = st.tabs(
+                [
+                    "Metrics",
+                    "Funnel",
+                    "Heatmap",
+                    "Anomalies",
+                    "Health",
+                    "Business Context",
+                    "Staff API",
+                ]
+            )
+            with tab_m:
+                st.caption("GET /stores/{store_id}/metrics")
+                st.json(metrics)
+            with tab_f:
+                st.caption("GET /stores/{store_id}/funnel")
+                st.json(funnel)
+            with tab_hm:
+                st.caption("GET /stores/{store_id}/heatmap")
+                st.json(heatmap)
+            with tab_a:
+                st.caption("GET /stores/{store_id}/anomalies")
+                st.json(anomalies)
+            with tab_h:
+                st.caption("GET /health")
+                st.json(health)
+            with tab_bi:
+                st.caption("GET /stores/{store_id}/business-insights")
+                if business_insights:
+                    st.markdown(f"**Source:** `{business_insights.get('source', 'fallback')}`")
+                    st.markdown("**Aggregated analytics context (sent to LLM)**")
+                    st.json(business_insights.get("context", {}))
+                    st.markdown("**Generated insight payload**")
+                    st.json(business_insights.get("insights", {}))
+                else:
+                    st.info(
+                        "Business insights were not loaded. Narrative sections use local fallback text."
+                    )
+            with tab_staff:
+                st.caption("GET /stores/{store_id}/staff-analysis")
+                if staff_analysis:
+                    st.json(staff_analysis)
+                else:
+                    st.info("Staff analysis was not loaded for this store and date.")
         st.markdown("</div>", unsafe_allow_html=True)

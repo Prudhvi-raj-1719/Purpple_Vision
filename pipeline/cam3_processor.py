@@ -57,6 +57,7 @@ class Cam3Stats:
 
     entry_count: int = 0
     exit_count: int = 0
+    video_writer: Any | None = None
 
 
 def denormalize_polygon(
@@ -445,7 +446,9 @@ def process_video(
     start_frame: int | None = None,
     pipeline_emitter: PipelineEmitter | None = None,
     events_output_path: Path | None = None,
-) -> Tuple[int, int]:
+    annotated_video_path: Path | None = None,
+    video_writer: Any | None = None,
+) -> Tuple[int, int, Any | None]:
     capture = cv2.VideoCapture(str(video_path))
     if not capture.isOpened():
         raise FileNotFoundError(f"Unable to open video: {video_path}")
@@ -521,6 +524,13 @@ def process_video(
     if show_window:
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
 
+    from pipeline.shelf_preview import open_mp4_writer
+
+    writer = video_writer
+    if annotated_video_path is not None and writer is None:
+        writer = open_mp4_writer(annotated_video_path, video_width, video_height, fps)
+
+    last_annotated: np.ndarray | None = None
     original_frame = start_frame
     try:
         while True:
@@ -528,51 +538,55 @@ def process_video(
             if not success:
                 break
 
-            if original_frame % config.process_every_n_frames != 0:
-                original_frame += 1
-                del frame
-                continue
-
-            detections = detect_persons(frame, yolo_model, config)
-            if tracker is not None:
-                detections = tracker.update_with_detections(detections)
-            match_utc = None
-            if reid_manager is not None:
-                match_utc = match_utc_for_frame(
-                    config,
+            run_inference = original_frame % config.process_every_n_frames == 0
+            if run_inference:
+                detections = detect_persons(frame, yolo_model, config)
+                if tracker is not None:
+                    detections = tracker.update_with_detections(detections)
+                match_utc = None
+                if reid_manager is not None:
+                    match_utc = match_utc_for_frame(
+                        config,
+                        original_frame,
+                        fps,
+                        clip_id=clip_id,
+                    )
+                    reid_manager.update_tracks(frame, detections, match_utc=match_utc)
+                track_states = process_frame_updates(
+                    engine,
+                    event_emitter,
+                    detections,
                     original_frame,
-                    fps,
-                    clip_id=clip_id,
+                    config.camera_key,
+                    reid_manager,
+                    match_utc=match_utc,
                 )
-                reid_manager.update_tracks(frame, detections, match_utc=match_utc)
-            track_states = process_frame_updates(
-                engine,
-                event_emitter,
-                detections,
-                original_frame,
-                config.camera_key,
-                reid_manager,
-                match_utc=match_utc,
-            )
-            active_tracks = len(detections) if detections.tracker_id is not None else 0
-
-            if show_window:
-                annotated = draw_entry_polygon(frame, entry_polygon)
-                annotated = annotate_detections(annotated, detections, track_states)
-                annotated = draw_stats_overlay(
-                    annotated,
+                active_tracks = len(detections) if detections.tracker_id is not None else 0
+                last_annotated = draw_entry_polygon(frame, entry_polygon)
+                last_annotated = annotate_detections(
+                    last_annotated, detections, track_states
+                )
+                last_annotated = draw_stats_overlay(
+                    last_annotated,
                     engine.entry_count,
                     engine.exit_count,
                     active_tracks,
                     original_frame,
                 )
-                cv2.imshow(window_name, annotated)
+                del frame, detections, track_states
+            else:
+                last_annotated = draw_entry_polygon(frame, entry_polygon)
+                del frame
+
+            if writer is not None and last_annotated is not None:
+                writer.write(last_annotated)
+
+            if show_window and last_annotated is not None:
+                cv2.imshow(window_name, last_annotated)
                 key = cv2.waitKey(1) & 0xFF
                 if key in (ord("q"), 27):
                     break
-                del annotated
 
-            del frame, detections, track_states
             original_frame += 1
 
         if engine.enable_track_loss_flush:
@@ -604,7 +618,7 @@ def process_video(
         f"born_near_threshold_tracks={rs.born_near_threshold_tracks}"
     )
     event_emitter.print_summary_cam3()
-    return engine.entry_count, engine.exit_count
+    return engine.entry_count, engine.exit_count, writer
 
 
 def _process_cam3_video_once(
@@ -617,13 +631,15 @@ def _process_cam3_video_once(
     show_window: bool = False,
     clip_id: str | None = None,
     start_frame: int | None = None,
+    annotated_video_path: Path | None = None,
+    video_writer: Any | None = None,
 ) -> Cam3Stats:
     """Run retail CAM3 engine on one video file."""
     if not path.exists():
         raise FileNotFoundError(f"Missing CAM3 video: {path}")
 
     window = f"CAM3 Entry Exit ({clip_id})" if clip_id else "CAM3 Entry Exit"
-    entry_count, exit_count = process_video(
+    entry_count, exit_count, writer = process_video(
         path,
         yolo_model,
         config,
@@ -633,8 +649,14 @@ def _process_cam3_video_once(
         start_frame=start_frame,
         pipeline_emitter=emitter,
         events_output_path=events_output_path,
+        annotated_video_path=annotated_video_path,
+        video_writer=video_writer,
     )
-    return Cam3Stats(entry_count=entry_count, exit_count=exit_count)
+    return Cam3Stats(
+        entry_count=entry_count,
+        exit_count=exit_count,
+        video_writer=writer,
+    )
 
 
 def process_cam3_video(
@@ -669,8 +691,13 @@ def process_cam3_video(
     yolo_model = YOLO(str(config.yolo_model_path))
     logger.info("CAM3 YOLO loaded: %s", config.yolo_model_path)
 
+    from pipeline.shelf_preview import shelf_tracking_output_path
+
+    tracking_path = shelf_tracking_output_path(cfg.pipeline_output_dir, CAMERA_KEY)
+
     if config.has_multi_clip:
         combined = Cam3Stats()
+        shared_writer = None
         for clip in config.cam3_clips:
             clip_path = video_path or clip.video_path
             stride = clip.process_every_n_frames or config.process_every_n_frames
@@ -693,9 +720,15 @@ def process_cam3_video(
                 show_window=show_window,
                 clip_id=clip.clip_id,
                 start_frame=None,
+                annotated_video_path=tracking_path,
+                video_writer=shared_writer,
             )
             combined.entry_count += clip_stats.entry_count
             combined.exit_count += clip_stats.exit_count
+            shared_writer = clip_stats.video_writer
+        if shared_writer is not None:
+            shared_writer.release()
+            logger.info("Wrote annotated tracking video: %s", tracking_path)
         return combined
 
     path = video_path or config.primary_video_path
@@ -705,7 +738,7 @@ def process_cam3_video(
     standalone_out = None if emitter is not None else (
         output_path or config.default_events_output_path
     )
-    return _process_cam3_video_once(
+    stats = _process_cam3_video_once(
         path,
         config=config,
         yolo_model=yolo_model,
@@ -713,7 +746,12 @@ def process_cam3_video(
         events_output_path=standalone_out,
         show_window=show_window,
         start_frame=None,
+        annotated_video_path=tracking_path,
     )
+    if stats.video_writer is not None:
+        stats.video_writer.release()
+        logger.info("Wrote annotated tracking video: %s", tracking_path)
+    return stats
 
 
 def run_cli(
@@ -838,7 +876,7 @@ def main() -> None:
         show_window=os.getenv("CAM3_EVENTS_HEADLESS") != "1",
         start_frame=cli_start_frame,
         events_output_path=config.default_events_output_path,
-    )
+    )[0:2]
 
 
 if __name__ == "__main__":

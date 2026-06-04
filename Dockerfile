@@ -9,8 +9,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     DATABASE_URL=sqlite:////app/data/store_intelligence.db
 
-# System libraries required by OpenCV (headless)
+# OpenCV (headless) + FFmpeg (browser-playable shelf videos in Streamlit)
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
     libgl1 \
     libglib2.0-0 \
     libsm6 \

@@ -21,6 +21,21 @@ from scripts.synthetic_paths import synthetic_store_spec  # noqa: E402
 _ACTIVE_STORE_KEY: str | None = None
 
 STORE1_REAL_KEY = "store1_real"
+STORE2_REAL_KEY = "store2_real"
+CCTV_REAL_STORE_KEYS = frozenset({STORE1_REAL_KEY, STORE2_REAL_KEY})
+
+
+def is_cctv_real_store(store_key: str) -> bool:
+    return store_key in CCTV_REAL_STORE_KEYS
+
+
+def cctv_pipeline_store_key(dashboard_store_key: str) -> str:
+    """Map dashboard CCTV keys to ``stores/`` config keys."""
+    if dashboard_store_key == STORE1_REAL_KEY:
+        return "store_1"
+    if dashboard_store_key == STORE2_REAL_KEY:
+        return "store_2"
+    return dashboard_store_key
 
 
 @dataclass(frozen=True)
@@ -41,7 +56,7 @@ class DashboardStoreOption:
 
 
 def dashboard_store_options() -> tuple[DashboardStoreOption, ...]:
-    """Store 1 / Store 2 validation fixtures plus store_1 CCTV intelligence DB."""
+    """Validation fixtures plus per-store CCTV intelligence databases."""
     options: list[DashboardStoreOption] = []
     for store_key in ("store_1", "store_2"):
         spec = synthetic_store_spec(store_key)
@@ -57,17 +72,21 @@ def dashboard_store_options() -> tuple[DashboardStoreOption, ...]:
 
     from pipeline.store_config import get_store_config
 
-    cfg = get_store_config("store_1")
-    options.append(
-        DashboardStoreOption(
-            label="store1_real",
-            store_key=STORE1_REAL_KEY,
-            store_id=cfg.store_id,
-            database_path=intelligence_database_path(cfg),
-            default_metric_date=date.fromisoformat(cfg.pos_sale_date),
-            is_intelligence_db=True,
+    for pipeline_key, dashboard_key, label in (
+        ("store_1", STORE1_REAL_KEY, "store1_real"),
+        ("store_2", STORE2_REAL_KEY, "store2_real"),
+    ):
+        cfg = get_store_config(pipeline_key)
+        options.append(
+            DashboardStoreOption(
+                label=label,
+                store_key=dashboard_key,
+                store_id=cfg.store_id,
+                database_path=intelligence_database_path(cfg),
+                default_metric_date=date.fromisoformat(cfg.pos_sale_date),
+                is_intelligence_db=True,
+            )
         )
-    )
     return tuple(options)
 
 
@@ -80,8 +99,9 @@ def option_for_key(store_key: str) -> DashboardStoreOption:
 
 def missing_database_hint(option: DashboardStoreOption) -> str:
     if option.is_intelligence_db:
+        pipeline_key = cctv_pipeline_store_key(option.store_key)
         return (
-            "Run: $env:PURPPLE_STORE = \"store_1\"; python scripts/demo_runner.py"
+            f'$env:PURPPLE_STORE = "{pipeline_key}"; python scripts/demo_runner.py'
         )
     return f"python scripts/demo_validation_run.py --store {option.store_key}"
 
@@ -161,6 +181,11 @@ def api_base_url_for_store(store_key: str) -> str:
     if store_key == STORE1_REAL_KEY:
         return os.getenv(
             "STORE_1_API_BASE_URL",
+            os.getenv("API_BASE_URL", "http://localhost:8000"),
+        ).rstrip("/")
+    if store_key == STORE2_REAL_KEY:
+        return os.getenv(
+            "STORE_2_API_BASE_URL",
             os.getenv("API_BASE_URL", "http://localhost:8000"),
         ).rstrip("/")
     env_key = f"STORE_{store_key[-1]}_API_BASE_URL"

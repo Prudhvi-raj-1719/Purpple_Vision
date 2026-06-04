@@ -53,7 +53,7 @@ coverage.xml
 # Logs (runtime *.log files)
 *.log
 
-# Database
+# Database (local SQLite — not committed; ship demo DBs separately if needed)
 *.db
 *.sqlite
 *.sqlite3
@@ -63,6 +63,9 @@ coverage.xml
 # Legacy demo outputs (superseded by pipeline_demo_store_1 / pipeline_demo_store_2)
 data/outputs/pipeline/pipeline_demo/
 data/outputs/pipeline/pipeline_demo_report.txt
+
+# Pipeline tracking videos (large — regenerate locally; do not push to GitHub)
+data/outputs/pipeline/**/*.mp4
 
 # Dataset files (challenge data — do not commit)
 data/clips/

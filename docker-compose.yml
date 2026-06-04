@@ -1,5 +1,7 @@
 # Store Intelligence — Docker Compose (SQLite only)
-# Plain `docker compose up --build` starts the API. No .env file required.
+# API only:  docker compose up --build
+# API + UI:  docker compose --profile dashboard up --build
+# For hackathon video demo, local Streamlit + committed SQLite is usually simpler (see README).
 
 services:
   api:
@@ -50,6 +52,8 @@ services:
       - "${DASHBOARD_PORT:-8501}:8501"
     environment:
       API_BASE_URL: http://api:8000
+      # Dashboard defaults to reading bound SQLite (DASHBOARD_USE_API unset).
+      # Set DASHBOARD_USE_API=true to force HTTP mode against the api service.
     depends_on:
       api:
         condition: service_healthy

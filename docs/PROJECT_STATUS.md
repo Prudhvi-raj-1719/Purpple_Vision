@@ -1,84 +1,78 @@
 # Project Status
 
-**Last updated:** 2026-06-01 (documentation refresh)  
-**Store:** `STORE_BLR_002` (Brigade Bangalore demo)
-
-Quick links: [README](../README.md) · [DESIGN](DESIGN.md) · [project journey](reports/project_journey.md)
+**Last updated:** 2026-06-04  
+**Submission guide:** [SUBMISSION.md](SUBMISSION.md)
 
 ---
 
 ## Completed
 
-- ✓ **Detection Pipeline** — YOLO11m + ByteTrack; CAM1/CAM2/CAM3/CAM5 processors, POS loader, purchase matching
+- ✓ **Detection Pipeline** — YOLO11m + ByteTrack; CAM1/CAM2/CAM3/CAM5 per store (`store_1`, `store_2`)
+- ✓ **Per-store outputs** — `pipeline_demo_store_1`, `pipeline_demo_store_2` JSONL + tracking MP4
 - ✓ **Event Ingestion** — `POST /events/ingest` with idempotent UUID dedup
-- ✓ **Session Logic** — ENTRY/REENTRY → EXIT; visitor-level dedup for REENTRY
-- ✓ **Metrics** — visitors, sessions, dwell, queue, billing reach, conversion
-- ✓ **Funnel** — visitor-level stages with drop-off percentages
-- ✓ **Heatmap** — zone engagement scores with data-confidence flag
-- ✓ **Anomalies** — QUEUE_SPIKE, CONVERSION_DROP, DEAD_ZONE
-- ✓ **Health Endpoint** — DB availability, feed staleness, STALE_FEED warnings
-- ✓ **Dashboard** — Streamlit UI consuming FastAPI only
-- ✓ **Revenue KPI** — `total_revenue_inr` on `/metrics` and dashboard card
-- ✓ **Validation Dataset** — `data/synthetic/` with ENTRY events (3 sessions, 66.7% conversion)
-- ✓ **Demo Runner** — `scripts/demo_runner.py` orchestrates pipeline → bridge → validation
+- ✓ **Session Logic** — ENTRY/REENTRY → EXIT
+- ✓ **Metrics / Funnel / Heatmap / Anomalies / Health**
+- ✓ **Dashboard** — Streamlit with four store modes (validation + CCTV real)
+- ✓ **store1_real / store2_real** — Manager UI, shelf videos (FFmpeg → H.264), brand-area analytics
+- ✓ **Demo Runner** — `scripts/demo_runner.py` per `PURPPLE_STORE`
+- ✓ **Validation datasets** — `store_1_validation.db`, `store_2_validation.db`
+- ✓ **Docker** — API + optional dashboard profile (FFmpeg in image for video)
 
 ---
 
-## Bonus
+## Dashboard stores
 
-- ✓ **Dashboard UI** — health panel, queue KPIs, dwell-by-zone table, heatmap confidence badge, reviewer labels
-
----
-
-## Future Improvements
-
-- Real-time WebSocket updates (live dashboard refresh without manual reload)
-- Better anomaly baselines (7-day rolling conversion, 30-minute dead-zone timer per challenge PDF)
-- Production PostgreSQL deployment (multi-store, concurrent ingest)
+| Label | Database | Layout |
+|-------|----------|--------|
+| Store 1 | `store_1_validation.db` | SaaS analytics |
+| Store 2 | `store_2_validation.db` | SaaS analytics |
+| store1_real | `store_1_intelligence.db` | CCTV manager view |
+| store2_real | `store_2_intelligence.db` | CCTV manager view |
 
 ---
 
-## Validation snapshot
+## Submission demo (video)
 
-Run `python scripts/demo_validation_run.py` for deterministic proof:
+1. Install FFmpeg (see [SUBMISSION.md](SUBMISSION.md)).
+2. `pip install -r requirements.txt`
+3. `streamlit run dashboard/streamlit_app.py`
+4. Select **store1_real** or **store2_real**, date **2026-04-10**.
 
-| Metric | Expected |
-|--------|----------|
-| Visitors | 3 |
-| Sessions | 3 |
-| Converted | 2 |
-| Revenue (INR) | 2,148.50 |
-| Conversion | 66.7% |
-
-Report: [reports/demo_validation_report.md](reports/demo_validation_report.md)
+No Render / cloud deploy required for judging.
 
 ---
 
-## Documentation map
+## Validation snapshot (synthetic)
 
-| Path | Contents |
-|------|----------|
-| [reports/project_journey.md](reports/project_journey.md) | Complete development story (Phase 1–6) |
-| [reports/](reports/) | Validation and verification evidence |
-| [archive/](archive/) | Superseded docs and migration notes |
+```powershell
+python scripts/demo_validation_run.py --store all
+```
+
+| Store | Visitors | Conversion | Revenue (INR) | Date |
+|-------|----------|------------|---------------|------|
+| store_1 | 3 | 66.7% | 2,148.50 | 2026-06-01 |
+| store_2 | (see report) | — | — | 2026-04-10 |
+
+Reports: [reports/demo_validation_report_store_1.md](reports/demo_validation_report_store_1.md), [store_2](reports/demo_validation_report_store_2.md)
 
 ---
 
-## Known operational gaps
+## Known operational notes
 
-1. **Brigade CCTV demo** — zone-only events without CAM3 ENTRY → 0 sessions on production bridged data (`2026-04-10`). Use validation DB + `2026-06-01` for non-zero dashboard demo.
-2. **Purchase matching** — offline JSON only; not exposed via API.
-3. **Staff detection** — pipeline stub; metrics respect `is_staff` flag when set.
-4. **Cross-camera ReID** — not implemented; visitor IDs are per-camera track tokens.
+1. **Brigade CCTV (store_1)** — shelf zones fire without CAM3 ENTRY on some days → `unique_visitors` may be 0 on `/metrics`; **store1_real** falls back to shelf shopper counts for the Visitors KPI.
+2. **store_2** — CAM2 disabled; right-camera tab may be empty until CAM2 footage is added.
+3. **Shelf videos** — OpenCV writes `mp4v`; browsers need FFmpeg to build `*_web.mp4` for playback.
+4. **Purchase matching** — offline JSON only; not on the manager dashboard.
 
 ---
 
 ## Quick commands
 
 ```powershell
-docker compose up --build
-pytest
-python scripts/demo_validation_run.py
-python scripts/demo_runner.py
+pip install -r requirements.txt
 streamlit run dashboard/streamlit_app.py
+pytest
+python scripts/demo_validation_run.py --store all
+$env:PURPPLE_STORE = "store_1"; python scripts/demo_runner.py
+docker compose up --build
 ```

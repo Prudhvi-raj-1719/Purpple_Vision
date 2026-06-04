@@ -4,6 +4,8 @@
 
 **North Star:** Conversion rate = visitors who purchased ÷ unique visitors.
 
+**Submission runbook:** [docs/SUBMISSION.md](docs/SUBMISSION.md) (all commands reviewers need)
+
 ---
 
 ## Problem Statement
@@ -28,17 +30,17 @@ Raw CCTV clips
     → Ingestion (POST /events/ingest, POST /pos/ingest)
     → Session Builder (ENTRY/REENTRY → EXIT)
     → Metrics Engine (conversion, funnel, heatmap, anomalies)
-    → Dashboard (Streamlit → FastAPI)
+    → Dashboard (Streamlit)
 ```
 
 | Layer | Location | Role |
 |-------|----------|------|
 | **Detection Layer** | `pipeline/` | CAM1–CAM5 processors, POS loader |
-| **Event Stream** | `data/outputs/pipeline/` | Purpple-schema JSONL + NOTEBK mirrors |
+| **Event Stream** | `data/outputs/pipeline/` | Per-store JSONL (`pipeline_demo_store_1`, `pipeline_demo_store_2`) |
 | **Intelligence API** | `app/` | FastAPI + SQLite analytics |
-| **Dashboard** | `dashboard/streamlit_app.py` | Reviewer UI (API-only) |
+| **Dashboard** | `dashboard/streamlit_app.py` | Store selector + analytics UI |
 
-Deep dive: [docs/DESIGN.md](docs/DESIGN.md) · Flow diagrams: [docs/architecture/pipeline_flow.md](docs/architecture/pipeline_flow.md)
+Deep dive: [docs/DESIGN.md](docs/DESIGN.md) · Flow: [docs/architecture/pipeline_flow.md](docs/architecture/pipeline_flow.md)
 
 ---
 
@@ -48,118 +50,135 @@ Deep dive: [docs/DESIGN.md](docs/DESIGN.md) · Flow diagrams: [docs/architecture
 Purpple_Vision/
 ├── app/                         # FastAPI intelligence API
 ├── pipeline/                    # CCTV + POS processors
-├── dashboard/streamlit_app.py   # Streamlit dashboard
-├── scripts/                     # Bridge, validation, demo_runner orchestrators
-├── tests/                       # pytest (126 tests)
-├── examples/                    # Sample API JSON payloads
+├── dashboard/                   # streamlit_app.py, cctv_real_view.py, saas_presentation.py
+├── scripts/                     # demo_runner, bridge, demo_validation_run
+├── stores/                      # store_1, store_2 configs (zones, videos)
+├── tests/
 ├── data/
-│   ├── cctv/                    # CCTV footage (not committed)
-│   ├── pos/                     # Raw Brigade POS CSV
-│   ├── outputs/                 # Generated pipeline + POS + matching JSON
-│   ├── databases/               # SQLite files (runtime)
-│   └── synthetic/               # demo_events.jsonl + demo_pos.csv
+│   ├── cctv/                    # Footage (not committed)
+│   ├── pos/                     # Brigade POS CSV
+│   ├── outputs/pipeline/        # Generated JSONL + tracking MP4
+│   └── databases/               # SQLite (four demo DBs may be committed)
 └── docs/
-    ├── DESIGN.md                # Architecture
-    ├── CHOICES.md               # Engineering decisions
-    ├── PROJECT_STATUS.md        # Completion checklist
-    ├── architecture/            # Schema, API, pipeline flow
-    ├── reports/
-    │   ├── project_journey.md     # Development journey (single document)
-    └── archive/                 # Historical phase reports
+    ├── SUBMISSION.md            # Hackathon / reviewer commands
+    └── PROJECT_STATUS.md
 ```
 
 ---
 
-## Quick Start
+## Prerequisites
 
-**Prerequisites:** Python 3.11, Docker (optional)
+- **Python 3.11+**
+- **`pip install -r requirements.txt`**
+- **`models/yolo11m.pt`** (YOLO weights; not in git)
+- **`data/cctv/`** footage (only to regenerate pipeline; not in git)
+- **FFmpeg** — required for in-browser playback of `cam*_tracking.mp4` on **store1_real** / **store2_real**  
+  Windows: `choco install ffmpeg -y` or `winget install --id Gyan.FFmpeg -e`
+
+---
+
+## Quick start — dashboard (recommended for demo video)
 
 ```powershell
+cd Purpple_Vision
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-python scripts/phase0_import_check.py
-docker compose up --build
+streamlit run dashboard/streamlit_app.py
 ```
 
-- API: http://localhost:8000/docs
-- Health: http://localhost:8000/health
+Open http://localhost:8501
 
-Default database: `data/databases/store_intelligence.db` (override with `DATABASE_URL`).
+| Sidebar store | Database | Typical trading day |
+|---------------|----------|-------------------|
+| **Store 1** | `store_1_validation.db` | 2026-06-01 |
+| **Store 2** | `store_2_validation.db` | 2026-04-10 |
+| **store1_real** | `store_1_intelligence.db` | 2026-04-10 |
+| **store2_real** | `store_2_intelligence.db` | 2026-04-10 |
+
+The dashboard reads analytics from the **bound SQLite file** by default (no API server required).
 
 ---
 
-## Run Detection Pipeline
+## Commands to regenerate data
 
-### Individual cameras
-
-```powershell
-python -m pipeline.cam1_processor      # Shelf zones (CAM1)
-python -m pipeline.cam2_processor      # Shelf zones (CAM2)
-python -m pipeline.entry_exit            # Entry/exit (CAM3)
-python -m pipeline.queue                 # Billing queue (CAM5)
-python -m pipeline.pos_loader            # Brigade POS → aggregated CSV
-python -m pipeline.purchase_matching     # Offline CCTV ↔ POS matching
-```
-
-Outputs: `data/outputs/pipeline/pipeline_demo/cam*_events.jsonl`
-
-### All cameras (orchestrated)
+### Full CCTV pipeline + intelligence DB (one store)
 
 ```powershell
-python scripts/run_pipeline_demo.py
-```
-
-### Full end-to-end workflow
-
-```powershell
+$env:PURPPLE_STORE = "store_1"   # Brigade — or "store_2" for competition footage
 python scripts/demo_runner.py
 ```
 
-Runs CAM1→CAM5, POS loader, purchase matching, bridge to SQLite, and synthetic validation. Report: [docs/reports/demo_run_report.md](docs/reports/demo_run_report.md)
+Creates:
 
-### Bridge pipeline → product DB
+- `data/outputs/pipeline/pipeline_demo_store_{N}/` — `cam*_events.jsonl`, `cam*_tracking.mp4`
+- `data/databases/store_{N}_intelligence.db`
+
+Report: [docs/reports/demo_run_report.md](docs/reports/demo_run_report.md)
+
+### Synthetic validation only (isolated DBs, ENTRY proof)
 
 ```powershell
+python scripts/demo_validation_run.py --store all
+```
+
+| Store | DB | Metric date |
+|-------|-----|-------------|
+| store_1 | `store_1_validation.db` | 2026-06-01 |
+| store_2 | `store_2_validation.db` | 2026-04-10 |
+
+Reports: [docs/reports/demo_validation_report_store_1.md](docs/reports/demo_validation_report_store_1.md), [store_2](docs/reports/demo_validation_report_store_2.md)
+
+### Individual pipeline modules
+
+```powershell
+$env:PURPPLE_STORE = "store_1"
+python -m pipeline.cam1_processor
+python -m pipeline.cam2_processor
+python -m pipeline.entry_exit
+python -m pipeline.queue
+python -m pipeline.pos_loader
 python scripts/bridge_pipeline_to_product.py
 ```
 
 ---
 
-## Run Validation Demo
-
-Synthetic dataset with **ENTRY events** (proves sessions + funnel + revenue):
+## Optional — FastAPI + API-driven dashboard
 
 ```powershell
-python scripts/demo_validation_run.py
-```
-
-Uses isolated DB: `data/databases/demo_validation.db`  
-Data: `data/synthetic/demo_events.jsonl`, `data/synthetic/demo_pos.csv`  
-Metric date: **2026-06-01**
-
-**Expected output:**
-
-```
-Visitors: 3
-Sessions: 3
-Converted: 2
-Revenue (INR): 2,148.50
-Conversion rate: 66.67%
-```
-
-**View on dashboard:**
-
-```powershell
-# Terminal 1
-$env:DATABASE_URL = "sqlite:///./data/databases/demo_validation.db"
+$env:DATABASE_URL = "sqlite:///./data/databases/store_1_intelligence.db"
 uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
 
-# Terminal 2
+```powershell
+$env:DASHBOARD_USE_API = "true"
 $env:API_BASE_URL = "http://localhost:8000"
-$env:DEFAULT_METRIC_DATE = "2026-06-01"
 streamlit run dashboard/streamlit_app.py
 ```
 
-Full report: [docs/reports/demo_validation_report.md](docs/reports/demo_validation_report.md)
+- API docs: http://localhost:8000/docs  
+- Health: http://localhost:8000/health  
+
+---
+
+## Docker (optional)
+
+```powershell
+docker compose up --build
+docker compose --profile dashboard up --build
+```
+
+API: port **8000** · Dashboard (profile): port **8501** · Mount `./data` for SQLite.
+
+---
+
+## Dashboard layouts
+
+| Store key | UI |
+|-----------|-----|
+| `store_1`, `store_2` | Full SaaS analytics (metrics, funnel, heatmap, anomalies, technical panel) |
+| `store1_real` | Manager view — shelf camera videos, brand-area heatmap, revenue KPIs |
+| `store2_real` | Same manager metrics and brand areas (no live video panel) |
 
 ---
 
@@ -167,33 +186,15 @@ Full report: [docs/reports/demo_validation_report.md](docs/reports/demo_validati
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `POST` | `/events/ingest` | Batch ingest behavioural events (idempotent) |
+| `POST` | `/events/ingest` | Batch ingest behavioural events |
 | `POST` | `/pos/ingest` | Batch ingest POS transactions |
-| `GET` | `/stores/{id}/metrics?date=` | North Star KPIs, dwell, queue, revenue |
-| `GET` | `/stores/{id}/funnel?date=` | Session funnel + drop-off % |
-| `GET` | `/stores/{id}/heatmap?date=` | Zone engagement scores |
-| `GET` | `/stores/{id}/anomalies?date=` | Queue spike, conversion drop, dead zone |
-| `GET` | `/health` | Service + DB + feed staleness |
+| `GET` | `/stores/{id}/metrics?date=` | KPIs, dwell, queue, revenue |
+| `GET` | `/stores/{id}/funnel?date=` | Session funnel |
+| `GET` | `/stores/{id}/heatmap?date=` | Zone engagement |
+| `GET` | `/stores/{id}/anomalies?date=` | Operational alerts |
+| `GET` | `/health` | Service + DB status |
 
-Full reference: [docs/architecture/api_reference.md](docs/architecture/api_reference.md) · Examples: `examples/*.json`
-
----
-
-## Dashboard
-
-Streamlit app at `dashboard/streamlit_app.py` — **reads FastAPI only** (no direct SQLite).
-
-| Section | API source | What reviewers see |
-|---------|------------|-------------------|
-| **System health** | `GET /health` | Service status, DB, last event, STALE_FEED warnings |
-| **Key metrics** | `GET /metrics` | Visitors, sessions, revenue, conversion |
-| **Queue KPIs** | `GET /metrics` | Queue depth, abandonment rate, avg dwell |
-| **Dwell by zone** | `GET /metrics` | Per-zone average dwell table |
-| **Conversion funnel** | `GET /funnel` | Entry → zone → billing → purchase + drop-off |
-| **Zone heatmap** | `GET /heatmap` | Engagement scores, dwell charts, confidence badge |
-| **Anomalies** | `GET /anomalies` | Queue / conversion / dead-zone alerts with actions |
-
-Empty state when no ENTRY sessions exist (common with zone-only Brigade demo data).
+Reference: [docs/architecture/api_reference.md](docs/architecture/api_reference.md)
 
 ---
 
@@ -204,36 +205,28 @@ pytest
 pytest --cov=app
 ```
 
-126 tests covering ingestion, sessions, metrics, funnel, heatmap, anomalies, health, and edge cases.
+---
+
+## SQLite databases (not in git)
+
+All `*.db` files are **gitignored**. Reviewers generate them locally with `demo_validation_run.py` and `demo_runner.py` (see [docs/SUBMISSION.md](docs/SUBMISSION.md)).
 
 ---
 
-## Design Documents
+## Design documents
 
 | Document | Description |
 |----------|-------------|
-| [docs/reports/project_journey.md](docs/reports/project_journey.md) | **Development journey** — Phase 1 to final demo |
-| [docs/DESIGN.md](docs/DESIGN.md) | System architecture, sessions, analytics, limitations |
-| [docs/CHOICES.md](docs/CHOICES.md) | Five engineering decisions with alternatives |
+| [docs/SUBMISSION.md](docs/SUBMISSION.md) | **Reviewer / video demo commands** |
 | [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) | Completion checklist |
-
----
-
-## Data Directory
-
-```
-data/
-├── cctv/              # CCTV clips
-├── pos/               # Raw POS exports
-├── outputs/           # Regenerated pipeline/POS/matching artifacts
-├── databases/         # SQLite (store_intelligence, demo_*, test_*)
-└── synthetic/         # Validation dataset (ENTRY-based)
-```
-
-See [docs/DESIGN.md § Data layout](docs/DESIGN.md) for details.
+| [docs/reports/project_journey.md](docs/reports/project_journey.md) | Development journey |
+| [docs/DESIGN.md](docs/DESIGN.md) | Architecture and data layout |
+| [docs/CHOICES.md](docs/CHOICES.md) | Engineering decisions |
+| [stores/README.md](stores/README.md) | Per-store config |
 
 ---
 
 ## License & submission
 
-Hackathon submission for Apex Retail Store Intelligence Challenge. Brigade demo store: `STORE_BLR_002`.
+Hackathon submission for Apex Retail Store Intelligence Challenge.  
+Stores: **STORE_BLR_002** (store_1 / store1_real), **STORE_BLR_003** (store_2 / store2_real).

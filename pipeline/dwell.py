@@ -313,6 +313,8 @@ def process_zone_engagement_video(
     show_window: bool = False,
     window_title: str | None = None,
     process_every_n: int = PROCESS_EVERY_N_FRAMES,
+    annotated_video_path: Path | None = None,
+    min_overlap_pct: float | None = None,
 ) -> ZoneEngagementStats:
     """
     Run YOLO11m + ByteTrack zone-engagement on a CCTV clip.
@@ -348,10 +350,29 @@ def process_zone_engagement_video(
         event_sink=sink,
     )
     tracker = create_byte_tracker()
+    overlap_pct = (
+        float(min_overlap_pct)
+        if min_overlap_pct is not None
+        else float(MIN_OVERLAP_PCT)
+    )
+
+    from pipeline.shelf_preview import (
+        compose_tracking_frame,
+        draw_tracking_hud,
+        draw_zone_overlays,
+        open_mp4_writer,
+    )
 
     title = window_title or f"{camera_key} Zone Engagement"
     if show_window:
         cv2.namedWindow(title, cv2.WINDOW_NORMAL)
+
+    writer: cv2.VideoWriter | None = None
+    if annotated_video_path is not None:
+        writer = open_mp4_writer(annotated_video_path, video_width, video_height, fps)
+
+    last_detections: sv.Detections | None = None
+    last_track_zones: dict[int, tuple[str, int]] = {}
 
     original_frame = 0
     processed_count = 0
@@ -366,7 +387,49 @@ def process_zone_engagement_video(
             if not success or frame is None:
                 break
 
-            if original_frame % process_every_n != 0:
+            run_inference = original_frame % process_every_n == 0
+            if run_inference:
+                detections = detect_persons(frame, yolo_model)
+                detections = update_tracks(tracker, detections)
+                track_zones = assign_track_zones(
+                    detections,
+                    zone_polygons,
+                    video_width,
+                    video_height,
+                    min_overlap_pct=overlap_pct,
+                )
+                engine.update_active_tracks(original_frame, track_zones)
+                last_detections = detections
+                last_track_zones = track_zones
+                processed_count += 1
+            else:
+                track_zones = last_track_zones
+
+            if writer is not None or show_window:
+                if last_detections is not None and len(last_detections) > 0:
+                    display = compose_tracking_frame(
+                        frame,
+                        zone_polygons,
+                        last_detections,
+                        last_track_zones,
+                    )
+                else:
+                    display = draw_zone_overlays(frame, zone_polygons)
+                display = draw_tracking_hud(
+                    display,
+                    camera_label=f"{camera_key} · shelf tracking",
+                    aisle_visits=engine.stats.zone_enter,
+                    frame_idx=original_frame,
+                )
+                if writer is not None:
+                    writer.write(display)
+                if show_window:
+                    cv2.imshow(title, display)
+                    key = cv2.waitKey(1) & 0xFF
+                    if key in (ord("q"), 27):
+                        break
+
+            if not run_inference:
                 original_frame += 1
                 if original_frame % PROGRESS_LOG_EVERY_N_FRAMES == 0:
                     pct = 100.0 * original_frame / total_frames if total_frames > 0 else 0.0
@@ -383,23 +446,6 @@ def process_zone_engagement_video(
                     )
                 del frame
                 continue
-
-            detections = detect_persons(frame, yolo_model)
-            detections = update_tracks(tracker, detections)
-            track_zones = assign_track_zones(
-                detections,
-                zone_polygons,
-                video_width,
-                video_height,
-            )
-            engine.update_active_tracks(original_frame, track_zones)
-            processed_count += 1
-
-            if show_window:
-                cv2.imshow(title, frame)
-                key = cv2.waitKey(1) & 0xFF
-                if key in (ord("q"), 27):
-                    break
 
             del frame, detections, track_zones
             original_frame += 1
@@ -419,6 +465,9 @@ def process_zone_engagement_video(
     finally:
         engine.finalize(original_frame)
         capture.release()
+        if writer is not None:
+            writer.release()
+            logger.info("Wrote annotated tracking video: %s", annotated_video_path)
         if show_window:
             cv2.destroyAllWindows()
 

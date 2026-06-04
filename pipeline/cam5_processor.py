@@ -544,6 +544,19 @@ def process_cam5_video(
     engine = PaymentQueueEngine(event_sink=emitter, fps=fps, config=config)
     tracker = create_byte_tracker()
 
+    from pipeline.shelf_preview import (
+        compose_tracking_frame,
+        draw_tracking_hud,
+        draw_zone_overlays,
+        open_mp4_writer,
+        shelf_tracking_output_path,
+    )
+
+    tracking_path = shelf_tracking_output_path(cfg.pipeline_output_dir, CAMERA_KEY)
+    writer = open_mp4_writer(tracking_path, video_width, video_height, fps)
+    last_detections: sv.Detections | None = None
+    last_track_zones: Dict[int, str] = {}
+
     original_frame = 0
     processed_count = 0
     try:
@@ -557,36 +570,40 @@ def process_cam5_video(
             if not success or frame is None:
                 break
 
-            if original_frame % config.process_every_n_frames != 0:
-                original_frame += 1
-                if original_frame % config.progress_log_every_n_frames == 0:
-                    pct = 100.0 * original_frame / total_frames if total_frames > 0 else 0.0
-                    logger.info(
-                        "[PROGRESS] CAM5 frame=%s processed=%s (%.1f%% complete) "
-                        "queue_enter=%s queue_exit=%s payment_enter=%s payment_exit=%s",
-                        original_frame,
-                        processed_count,
-                        pct,
-                        engine.stats.queue_enter,
-                        engine.stats.queue_exit,
-                        engine.stats.payment_enter,
-                        engine.stats.payment_exit,
-                    )
-                del frame
-                continue
+            run_inference = original_frame % config.process_every_n_frames == 0
+            if run_inference:
+                detections = detect_persons(frame, yolo_model, config)
+                detections = tracker.update_with_detections(detections)
+                track_zones = assign_track_zones(
+                    detections,
+                    zone_polygons,
+                    video_width,
+                    video_height,
+                    config=config,
+                )
+                engine.update_active_tracks(original_frame, track_zones)
+                last_detections = detections
+                last_track_zones = track_zones
+                processed_count += 1
+                del detections, track_zones
 
-            detections = detect_persons(frame, yolo_model, config)
-            detections = tracker.update_with_detections(detections)
-            track_zones = assign_track_zones(
-                detections,
-                zone_polygons,
-                video_width,
-                video_height,
-                config=config,
+            if last_detections is not None and len(last_detections) > 0:
+                display = compose_tracking_frame(
+                    frame,
+                    zone_polygons,
+                    last_detections,
+                    {tid: (zone, 0) for tid, zone in last_track_zones.items()},
+                )
+            else:
+                display = draw_zone_overlays(frame, zone_polygons)
+            display = draw_tracking_hud(
+                display,
+                camera_label=f"{CAMERA_KEY} · billing queue",
+                aisle_visits=engine.stats.queue_enter,
+                frame_idx=original_frame,
             )
-            engine.update_active_tracks(original_frame, track_zones)
-            processed_count += 1
-            del frame, detections, track_zones
+            writer.write(display)
+            del frame
             original_frame += 1
             if original_frame % config.progress_log_every_n_frames == 0:
                 pct = 100.0 * original_frame / total_frames if total_frames > 0 else 0.0
@@ -604,6 +621,8 @@ def process_cam5_video(
     finally:
         engine.finalize(original_frame)
         capture.release()
+        writer.release()
+        logger.info("Wrote annotated tracking video: %s", tracking_path)
 
     pct = 100.0 * original_frame / total_frames if total_frames > 0 else 0.0
     logger.info(

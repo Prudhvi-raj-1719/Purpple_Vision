@@ -27,9 +27,9 @@ flowchart LR
 | **Synthetic Events** | ENTRY-based demo event file | `data/synthetic/demo_events.jsonl` |
 | **Synthetic POS** | Two matching POS transactions | `data/synthetic/demo_pos.csv` |
 | **Validation Runner** | Ingest, compute analytics, write report | `scripts/demo_validation_run.py` |
-| **Validation DB** | Isolated SQLite database | `data/databases/demo_validation.db` |
-| **FastAPI** | Serves computed KPIs | Port 8000 |
-| **Dashboard** | Display with metric date 2026-06-01 | Streamlit port 8501 |
+| **Validation DB** | Per-store isolated SQLite | `store_1_validation.db`, `store_2_validation.db` |
+| **FastAPI** | Serves computed KPIs (optional) | Port 8000 |
+| **Dashboard** | Store 1 → 2026-06-01; Store 2 → 2026-04-10 | Streamlit port 8501 |
 
 ## Expected results
 
@@ -44,17 +44,13 @@ flowchart LR
 ## Run commands
 
 ```powershell
-python scripts/demo_validation_run.py
-
-$env:DATABASE_URL = "sqlite:///./data/databases/demo_validation.db"
-uvicorn app.main:app --host 0.0.0.0 --port 8000
-
-$env:API_BASE_URL = "http://localhost:8000"
-$env:DEFAULT_METRIC_DATE = "2026-06-01"
+python scripts/demo_validation_run.py --store all
 streamlit run dashboard/streamlit_app.py
 ```
 
-Report: [../reports/demo_validation_report.md](../reports/demo_validation_report.md)
+See [../SUBMISSION.md](../SUBMISSION.md) for full reviewer commands.
+
+Reports: [../reports/demo_validation_report_store_1.md](../reports/demo_validation_report_store_1.md), [store_2](../reports/demo_validation_report_store_2.md)
 
 ## Related
 

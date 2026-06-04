@@ -24,6 +24,15 @@ stores/
 | `store_1` | CAM1–CAM5 (Brigade mp4s) | — |
 | `store_2` | CAM1, CAM3 (2 entry clips → one `cam3_events.jsonl`), CAM5 | CAM2 (disabled), CAM4 (no `cam4.json`) |
 
+## Streamlit dashboard
+
+| Sidebar | Intelligence DB | Pipeline output dir |
+|---------|-----------------|-------------------|
+| store1_real | `store_1_intelligence.db` | `pipeline_demo_store_1` |
+| store2_real | `store_2_intelligence.db` | `pipeline_demo_store_2` |
+
+Run `python scripts/demo_runner.py` with `PURPPLE_STORE` set to `store_1` or `store_2`, then open the matching **store*_real** entry in Streamlit.
+
 ## Load
 
 ```python

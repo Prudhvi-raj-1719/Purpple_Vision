@@ -34,7 +34,9 @@ from dashboard.saas_presentation import (
     render_trust_center,
     sidebar_brand_html,
 )
+from dashboard.cctv_real_view import render_cctv_real_dashboard
 from dashboard.validation_context import (
+    is_cctv_real_store,
     api_base_url_for_store,
     bind_validation_database,
     dashboard_store_options,
@@ -866,7 +868,7 @@ def main() -> None:
                 st.error(str(exc))
                 st.stop()
             if store_option.is_intelligence_db:
-                st.caption(f"Database: {store_option.database_path.name}")
+                pass
             else:
                 st.caption("Data source: Validation DB")
                 st.caption(f"Database: {store_option.database_path.name}")
@@ -931,8 +933,32 @@ def main() -> None:
         return
 
     if not health.get("database_available", False):
-        st.error("Store sales records are temporarily unavailable. Please try again shortly.")
+        if is_cctv_real_store(store_key):
+            st.error(
+                f"CCTV intelligence database is not available. "
+                f"{missing_database_hint(store_option)}"
+            )
+        else:
+            st.error(
+                "Store sales records are temporarily unavailable. Please try again shortly."
+            )
         st.stop()
+
+    if is_cctv_real_store(store_key):
+        render_cctv_real_dashboard(
+            store_key=store_key,
+            store_label=selected_label,
+            store_id=store_id,
+            metric_date=selected_date,
+            metrics=metrics,
+            funnel=funnel,
+            heatmap=heatmap,
+            anomalies=anomalies,
+            health=health,
+            friendly_zone_fn=friendly_zone,
+            format_dwell_fn=format_dwell_ms,
+        )
+        return
 
     if use_api_client():
         try:
