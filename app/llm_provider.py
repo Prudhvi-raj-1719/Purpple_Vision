@@ -319,9 +319,34 @@ def _dedupe_and_diversify_actions(
             if len(themed_out) >= min_items:
                 break
             theme = _action_theme(suggestion)
-            if theme in { _action_theme(x) for x in themed_out }:
+            if theme in {_action_theme(x) for x in themed_out}:
                 continue
             themed_out.append(suggestion)
+
+    # Second pass: allow duplicate themes but not duplicate text (Groq often returns [])
+    if len(themed_out) < min_items:
+        did_repair = True
+        seen_norm = {_normalize_action_text(x) for x in themed_out}
+        for suggestion in deterministic_supplier():
+            if len(themed_out) >= min_items:
+                break
+            norm = _normalize_action_text(suggestion)
+            if norm in seen_norm:
+                continue
+            themed_out.append(suggestion)
+            seen_norm.add(norm)
+
+    # Guaranteed schema minimum (e.g. manager_actions need 3)
+    if len(themed_out) < min_items:
+        did_repair = True
+        for filler in (
+            "Review staffing during peak hours to keep service levels high.",
+            "Ensure high-traffic brand areas are clearly signed and well stocked.",
+            "Monitor checkout lines and adjust lanes when queues build up.",
+        ):
+            if len(themed_out) >= min_items:
+                break
+            themed_out.append(filler)
 
     # final cap and final dedupe
     themed_out = _dedupe_actions(themed_out)[:max_items]
@@ -489,6 +514,56 @@ def _deterministic_checkout_summary(context: dict[str, Any]) -> str:
         return f"{base} A small number of customers reached checkout but did not complete a purchase."
 
     return f"{base} Most customers who reached checkout completed their purchase."
+
+
+def _force_minimum_insight_lists(
+    parsed: dict[str, Any],
+    context: dict[str, Any],
+) -> dict[str, Any]:
+    """Last-resort padding so BusinessInsightResponse validation succeeds."""
+    out = dict(parsed)
+    actions = out.get("manager_actions")
+    if not isinstance(actions, list):
+        actions = []
+    actions = [str(x).strip() for x in actions if str(x).strip()]
+    for suggestion in _deterministic_action_suggestions(context):
+        if len(actions) >= 3:
+            break
+        if suggestion not in actions:
+            actions.append(suggestion)
+    while len(actions) < 3:
+        actions.append("Review store operations and adjust staffing for peak periods.")
+    out["manager_actions"] = actions[:5]
+
+    checkout_actions = out.get("checkout_actions")
+    if not isinstance(checkout_actions, list):
+        checkout_actions = []
+    checkout_actions = [str(x).strip() for x in checkout_actions if str(x).strip()]
+    for suggestion in _deterministic_checkout_actions(context):
+        if len(checkout_actions) >= 2:
+            break
+        if suggestion not in checkout_actions:
+            checkout_actions.append(suggestion)
+    while len(checkout_actions) < 2:
+        checkout_actions.append("Keep checkout staffing aligned with customer traffic patterns.")
+    out["checkout_actions"] = checkout_actions[:4]
+
+    if not str(out.get("store_summary") or "").strip():
+        out["store_summary"] = "Store activity was recorded for the selected trading day."
+    if not str(out.get("checkout_summary") or "").strip():
+        out["checkout_summary"] = _deterministic_checkout_summary(context)
+
+    risks = out.get("business_risks")
+    if not isinstance(risks, list) or not risks:
+        out["business_risks"] = [
+            "Checkout wait times may increase during peak periods if lines build up."
+        ]
+    positives = out.get("positive_signals")
+    if not isinstance(positives, list) or not positives:
+        out["positive_signals"] = [
+            "Customer traffic and engagement signals are present for the selected day."
+        ]
+    return out
 
 
 def _normalize_insight_payload_for_schema(
@@ -914,12 +989,19 @@ class GroqProvider(LLMProvider):
             try:
                 validated = BusinessInsightResponse.model_validate(parsed)
             except ValidationError as exc:
-                logger.error(
-                    "Groq Pydantic validation failed errors=%s raw_model_output=%s",
-                    exc.errors(),
-                    content,
+                parsed, _ = _normalize_insight_payload_for_schema(
+                    parsed=_force_minimum_insight_lists(parsed, context),
+                    context=context,
                 )
-                return None
+                try:
+                    validated = BusinessInsightResponse.model_validate(parsed)
+                except ValidationError:
+                    logger.error(
+                        "Groq Pydantic validation failed errors=%s raw_model_output=%s",
+                        exc.errors(),
+                        content,
+                    )
+                    return None
 
             duration_ms = (time.perf_counter() - started) * 1000.0
             logger.info(
