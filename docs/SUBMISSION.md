@@ -25,9 +25,9 @@ Restart the terminal, then verify: `ffmpeg -version`
 
 ---
 
-## Fastest path — dashboard only (committed databases)
+## Fastest path — dashboard only (databases included)
 
-Committed SQLite fixtures (when present in the repo):
+Demo SQLite files are **committed** in the repository:
 
 | File | Dashboard store | Trading day |
 |------|-----------------|-------------|
@@ -35,6 +35,8 @@ Committed SQLite fixtures (when present in the repo):
 | `data/databases/store_2_validation.db` | **Store 2** | 2026-04-10 |
 | `data/databases/store_1_intelligence.db` | **store1_real** | 2026-04-10 |
 | `data/databases/store_2_intelligence.db` | **store2_real** | 2026-04-10 |
+
+No need to run `demo_validation_run.py` or `demo_runner.py` before the dashboard — clone, install, and start Streamlit.
 
 ```powershell
 cd Purpple_Vision
@@ -74,9 +76,9 @@ Then run Streamlit (commands above) and choose **store1_real** or **store2_real*
 
 ---
 
-## Synthetic validation stores (non-CCTV proof)
+## Synthetic validation stores (optional — regenerate only)
 
-Proves ENTRY sessions, funnel, and revenue without Brigade ENTRY lines:
+Skip this section on a fresh clone if you use the committed databases. Run only when you want to **rebuild** synthetic validation data from scratch:
 
 ```powershell
 python scripts/demo_validation_run.py --store all
@@ -149,6 +151,8 @@ Store 1 / Store 2 use the full **SaaS analytics** layout.
 
 ---
 
-## Databases (not in the repository)
+## Databases (included in the repository)
 
-SQLite files under `data/databases/` are **gitignored**. After clone, run the commands in **Fastest path** or **Regenerate CCTV** above so `store_*_validation.db` and `store_*_intelligence.db` exist locally before opening Streamlit.
+SQLite files under `data/databases/` are **committed** (~2 MB). After clone, run `pip install -r requirements.txt` and `streamlit run dashboard/streamlit_app.py` — no validation or pipeline scripts required for the demo.
+
+To **regenerate** databases locally, use **Regenerate CCTV** or **Synthetic validation** above.

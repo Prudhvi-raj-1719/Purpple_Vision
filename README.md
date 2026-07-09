@@ -6,7 +6,7 @@
 
 **Submission runbook:** [docs/SUBMISSION.md](docs/SUBMISSION.md) (all commands reviewers need)
 
-**Important for judges:** Databases and large tracking videos are **not** in git. After clone, run `python scripts/demo_validation_run.py --store all` and/or `python scripts/demo_runner.py` per store, then start Streamlit. Details: [docs/SUBMISSION.md](docs/SUBMISSION.md).
+**Important for judges:** Demo **SQLite databases are included** in git under `data/databases/` — no need to run `demo_validation_run.py` or `demo_runner.py` before opening the dashboard. Large **tracking MP4** files are still not in git (regenerate locally if you need shelf videos). Details: [docs/SUBMISSION.md](docs/SUBMISSION.md).
 
 ---
 
@@ -60,7 +60,7 @@ Purpple_Vision/
 │   ├── cctv/                    # Footage (not committed)
 │   ├── pos/                     # Brigade POS CSV
 │   ├── outputs/pipeline/        # Generated JSONL + tracking MP4
-│   └── databases/               # SQLite (generated locally; gitignored)
+│   └── databases/               # SQLite demo DBs (committed for judges)
 └── docs/
     ├── SUBMISSION.md            # Hackathon / reviewer commands
     └── PROJECT_STATUS.md
@@ -78,18 +78,8 @@ Purpple_Vision/
 
 ## Quick start — dashboard (recommended for demo video)
 
-**Step 1 — create databases** (required on a fresh clone):
-
 ```powershell
 pip install -r requirements.txt
-python scripts/demo_validation_run.py --store all
-$env:PURPPLE_STORE = "store_1"; python scripts/demo_runner.py
-$env:PURPPLE_STORE = "store_2"; python scripts/demo_runner.py
-```
-
-**Step 2 — run Streamlit:**
-
-```powershell
 streamlit run dashboard/streamlit_app.py
 ```
 
@@ -102,7 +92,9 @@ Open http://localhost:8501
 | **store1_real** | `store_1_intelligence.db` | 2026-04-10 |
 | **store2_real** | `store_2_intelligence.db` | 2026-04-10 |
 
-The dashboard reads analytics from the **bound SQLite file** by default (no API server required).
+All four databases ship in `data/databases/`. The dashboard reads analytics from the **bound SQLite file** by default (no API server required).
+
+> **Optional:** Run `demo_validation_run.py` / `demo_runner.py` only if you want to **regenerate** data from scratch (see below).
 
 ---
 
@@ -213,10 +205,10 @@ pytest --cov=app
 
 ---
 
-## Databases and videos (not in git)
+## Databases and videos
 
-- **SQLite** (`data/databases/*.db`) — gitignored; create with `demo_validation_run.py` and `demo_runner.py`.
-- **Tracking MP4** (`data/outputs/pipeline/**/*_tracking.mp4`) — gitignored (too large for GitHub); produced by `demo_runner.py`. **store1_real** uses a still frame from these files; **store2_real** is metrics-only.
+- **SQLite** (`data/databases/*.db`) — **committed** (~2 MB total). Includes validation + intelligence DBs for Store 1, Store 2, store1_real, and store2_real. Clone and run Streamlit — no setup scripts required.
+- **Tracking MP4** (`data/outputs/pipeline/**/*_tracking.mp4`) — gitignored (too large for GitHub); produced by `demo_runner.py`. **store1_real** uses a still frame from these files when present; **store2_real** is metrics-only.
 
 Full reviewer steps: [docs/SUBMISSION.md](docs/SUBMISSION.md).
 
