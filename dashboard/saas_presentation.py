@@ -459,6 +459,38 @@ SAAS_CSS = """
     @media (max-width: 1200px) { .zone-grid { grid-template-columns: repeat(2, 1fr); } }
     @media (max-width: 768px) { .zone-grid { grid-template-columns: 1fr; } }
 
+    .zone-tier-rows {
+        display: flex; flex-direction: column; gap: 1.35rem; margin-top: 1rem;
+    }
+    .zone-tier-row {
+        display: flex; align-items: stretch; gap: 1.25rem;
+    }
+    .zone-tier-label {
+        flex: 0 0 156px; min-width: 132px;
+        display: flex; align-items: center;
+        font-size: 0.7rem; font-weight: 800; text-transform: uppercase;
+        letter-spacing: 0.08em; line-height: 1.35;
+    }
+    .zone-tier-cards {
+        display: flex; flex-direction: row; flex-wrap: nowrap;
+        gap: 0.75rem; flex: 1; min-width: 0;
+        overflow-x: auto; padding-bottom: 0.15rem;
+        scrollbar-width: thin;
+    }
+    .zone-tier-cards .zone-card {
+        flex: 0 0 auto; width: 228px; min-width: 200px; max-width: 240px;
+    }
+    .zone-tier-section {
+        font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
+        letter-spacing: 0.07em; color: #64748b; margin: 1rem 0 0;
+    }
+    @media (max-width: 768px) {
+        .zone-tier-row { flex-direction: column; gap: 0.5rem; }
+        .zone-tier-label { flex: none; min-height: auto; }
+        .zone-tier-cards { flex-wrap: wrap; overflow-x: visible; }
+        .zone-tier-cards .zone-card { width: 100%; max-width: 100%; min-width: 0; }
+    }
+
     .zone-card {
         background: rgba(255,255,255,0.95); border-radius: 14px;
         padding: 0.9rem 1rem; border: 1px solid #e2e8f0;
@@ -1000,6 +1032,111 @@ def zone_card_html(zone: dict[str, Any], rank: int, tier: str) -> str:
     )
 
 
+def _zone_tier_buckets(
+    ranked: list[dict[str, Any]],
+    *,
+    score_key: str = "score",
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Split zones into top / moderate / needs-attention by engagement score."""
+    top = sorted(
+        [z for z in ranked if float(z.get(score_key, 0)) >= 50.0],
+        key=lambda x: float(x.get(score_key, 0)),
+        reverse=True,
+    )
+    moderate = sorted(
+        [z for z in ranked if 10.0 <= float(z.get(score_key, 0)) < 50.0],
+        key=lambda x: float(x.get(score_key, 0)),
+        reverse=True,
+    )
+    attention = sorted(
+        [z for z in ranked if float(z.get(score_key, 0)) < 10.0],
+        key=lambda x: float(x.get(score_key, 0)),
+    )
+    return top, moderate, attention
+
+
+def zone_tier_rows_html(
+    ranked: list[dict[str, Any]],
+    *,
+    friendly_zone_fn: Any,
+    format_dwell_fn: Any,
+    score_key: str = "score",
+) -> str:
+    """
+    Three rows: side label + horizontal cards.
+
+    Top performing · Moderate · Needs attention
+    """
+    def enrich(zones: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for z in zones:
+            score = float(z.get(score_key, z.get("score", 0)))
+            out.append({
+                **z,
+                "zone_display": friendly_zone_fn(str(z.get("zone_id", ""))),
+                "dwell_display": format_dwell_fn(float(z.get("dwell_ms", 0))),
+                "score": score,
+            })
+        return out
+
+    global_rank = {
+        str(z.get("zone_id", "")): i for i, z in enumerate(ranked, 1)
+    }
+
+    top_areas, moderate, attention = _zone_tier_buckets(ranked, score_key=score_key)
+    top_areas = enrich(top_areas)
+    moderate = enrich(moderate)
+    attention = enrich(attention)
+
+    def row(
+        title: str,
+        zones: list[dict[str, Any]],
+        tier: str,
+        empty_msg: str,
+        color: str,
+    ) -> str:
+        label = f'<div class="zone-tier-label" style="color:{color}">{title}</div>'
+        if not zones:
+            body = f'<div class="zone-empty">{empty_msg}</div>'
+        else:
+            cards = "".join(
+                zone_card_html(
+                    z,
+                    global_rank.get(str(z.get("zone_id", "")), 0),
+                    tier,
+                )
+                for z in zones
+            )
+            body = f'<div class="zone-tier-cards">{cards}</div>'
+        return f'<div class="zone-tier-row">{label}{body}</div>'
+
+    return (
+        '<div class="zone-tier-rows">'
+        + row(
+            "Top performing",
+            top_areas,
+            "green",
+            "No strong-engagement areas today",
+            "#047857",
+        )
+        + row(
+            "Moderate",
+            moderate,
+            "amber",
+            "No moderate-engagement areas today",
+            "#b45309",
+        )
+        + row(
+            "Needs attention",
+            attention,
+            "red",
+            "No low-engagement areas flagged",
+            "#b91c1c",
+        )
+        + "</div>"
+    )
+
+
 def checkout_widget_html(label: str, value: str, icon: str, status: str) -> str:
     status_text = _CHECKOUT_STATUS_LABELS.get(status, status.title())
     return (
@@ -1358,44 +1495,14 @@ def render_floor_intelligence(
     )
     st.plotly_chart(build_zone_floor_heatmap(ranked), use_container_width=True)
 
-    def enrich(zones: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        out = []
-        for z in zones:
-            out.append({
-                **z,
-                "zone_display": friendly_zone_fn(str(z.get("zone_id", ""))),
-                "dwell_display": format_dwell_fn(float(z.get("dwell_ms", 0))),
-            })
-        return out
-
-    top_areas = enrich(sorted(
-        [z for z in ranked if float(z.get("score", 0)) >= 50.0],
-        key=lambda x: float(x["score"]),
-        reverse=True,
-    ))
-    moderate = enrich(sorted(
-        [z for z in ranked if 10.0 <= float(z.get("score", 0)) < 50.0],
-        key=lambda x: float(x["score"]),
-        reverse=True,
-    ))
-    attention = enrich(sorted(
-        [z for z in ranked if float(z.get("score", 0)) < 10.0],
-        key=lambda x: float(x["score"]),
-    ))
-
-    def column(title: str, zones: list[dict[str, Any]], tier: str, empty_msg: str) -> str:
-        head = f'<p class="zone-col-head" style="color:#{"047857" if tier=="green" else "b45309" if tier=="amber" else "b91c1c"}">{title}</p>'
-        if not zones:
-            return head + f'<div class="zone-empty">{empty_msg}</div>'
-        cards = "".join(zone_card_html(z, i, tier) for i, z in enumerate(zones, 1))
-        return head + cards
-
+    st.markdown('<p class="zone-tier-section">Brand area performance</p>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="zone-grid">'
-        + column("Top performing", top_areas, "green", "No strong-engagement areas today")
-        + column("Moderate", moderate, "amber", "No moderate-engagement areas today")
-        + column("Needs attention", attention, "red", "No low-engagement areas flagged")
-        + "</div>",
+        zone_tier_rows_html(
+            ranked,
+            friendly_zone_fn=friendly_zone_fn,
+            format_dwell_fn=format_dwell_fn,
+            score_key="score",
+        ),
         unsafe_allow_html=True,
     )
     st.markdown("</div>", unsafe_allow_html=True)
@@ -1614,12 +1721,13 @@ def render_technical_panel(
             unsafe_allow_html=True,
         )
         if verification_mode:
-            tab_m, tab_f, tab_hm, tab_a, tab_staff = st.tabs(
+            tab_m, tab_f, tab_hm, tab_a, tab_bi, tab_staff = st.tabs(
                 [
                     "Metrics API",
                     "Funnel API",
                     "Heatmap API",
                     "Anomalies API",
+                    "Business Insights API",
                     "Staff Detection",
                 ]
             )
@@ -1635,6 +1743,18 @@ def render_technical_panel(
             with tab_a:
                 st.caption("GET /stores/{store_id}/anomalies")
                 st.json(anomalies)
+            with tab_bi:
+                st.caption("GET /stores/{store_id}/business-insights")
+                if business_insights:
+                    st.markdown(f"**Source:** `{business_insights.get('source', 'fallback')}`")
+                    st.markdown("**Aggregated analytics context (sent to LLM)**")
+                    st.json(business_insights.get("context", {}))
+                    st.markdown("**Generated insight payload**")
+                    st.json(business_insights.get("insights", {}))
+                else:
+                    st.info(
+                        "Business insights were not loaded. Check GROQ_API_KEY or run via validation DB."
+                    )
             with tab_staff:
                 st.caption("GET /stores/{store_id}/staff-analysis")
                 if staff_analysis:

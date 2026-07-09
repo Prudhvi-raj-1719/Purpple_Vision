@@ -932,6 +932,16 @@ def main() -> None:
         st.error(f"Failed to load analytics: {exc}")
         return
 
+    if business_insights is None and use_api_client():
+        try:
+            business_insights = fetch_json(
+                f"/stores/{store_id}/business-insights",
+                params,
+                base_url=api_base_url_for_store(store_key),
+            )
+        except httpx.HTTPError:
+            business_insights = None
+
     if not health.get("database_available", False):
         if is_cctv_real_store(store_key):
             st.error(
@@ -957,18 +967,19 @@ def main() -> None:
             health=health,
             friendly_zone_fn=friendly_zone,
             format_dwell_fn=format_dwell_ms,
+            business_insights=business_insights,
+        )
+        render_technical_panel(
+            health=health,
+            metrics=metrics,
+            funnel=funnel,
+            heatmap=heatmap,
+            anomalies=anomalies,
+            business_insights=business_insights,
+            staff_analysis=staff_analysis,
+            verification_mode=True,
         )
         return
-
-    if use_api_client():
-        try:
-            business_insights = fetch_json(
-                f"/stores/{store_id}/business-insights",
-                params,
-                base_url=api_base_url_for_store(store_key),
-            )
-        except httpx.HTTPError:
-            business_insights = None
 
     unique_visitors = int(metrics.get("unique_visitors", 0))
     total_sessions = int(metrics.get("total_sessions", 0))

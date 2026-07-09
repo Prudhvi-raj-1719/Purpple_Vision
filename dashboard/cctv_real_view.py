@@ -2,7 +2,7 @@
 CCTV-first dashboard for store1_real / store2_real — plain language for store managers.
 
 Shows live store camera view, brand-area interest, and business metrics.
-No technical API panel — manager-facing only.
+No technical API panel — manager-facing layout with optional technical panel at bottom (streamlit_app).
 """
 
 from __future__ import annotations
@@ -20,8 +20,11 @@ import streamlit as st
 from dashboard.saas_presentation import (
     DEFAULT_PLOT_MARGIN,
     PLOTLY_LAYOUT,
+    render_ai_insights,
+    render_recommended_actions,
+    render_todays_story,
     section_heading,
-    zone_card_html,
+    zone_tier_rows_html,
 )
 from dashboard.validation_context import (
     STORE1_REAL_KEY,
@@ -118,14 +121,6 @@ CCTV_CSS = """
     padding: 0.45rem 0.9rem; box-shadow: 0 1px 4px rgba(15,23,42,.04);
 }
 .brand-stat-chip em { font-style: normal; color: #64748b; font-weight: 500; }
-.brand-rank-grid {
-    display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-    gap: 0.75rem; margin-top: 1rem;
-}
-.brand-rank-title {
-    font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
-    letter-spacing: 0.07em; color: #64748b; margin: 1rem 0 0.5rem 0;
-}
 </style>
 """
 
@@ -377,18 +372,23 @@ def _visitors_today_for_display(
     metrics_uv = int(metrics.get("unique_visitors", 0))
     metrics_dwell = float(metrics.get("average_dwell_time_ms", 0.0))
 
+    def _dwell_for_display() -> float:
+        """Session dwell from /metrics; shelf zone dwell when session metric is zero."""
+        if metrics_dwell > 0:
+            return metrics_dwell
+        return cctv.avg_dwell_ms
+
     if metrics_uv > 0:
         return (
             metrics_uv,
-            metrics_dwell,
+            _dwell_for_display(),
             "Unique visitors who entered the store",
         )
 
     if cctv.entry_visitor_count > 0:
-        dwell = metrics_dwell if metrics_dwell > 0 else cctv.avg_dwell_ms
         return (
             cctv.entry_visitor_count,
-            dwell,
+            _dwell_for_display(),
             "Unique visitors who entered the store",
         )
 
@@ -442,6 +442,17 @@ def _executive_summary_bullets(
         f"{friendly_zone_fn(weak_zone)} received the lowest customer attention",
     ]
     return bullets
+
+
+def _dedupe_lines(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in items:
+        key = " ".join(item.strip().lower().split())
+        if key and key not in seen:
+            seen.add(key)
+            out.append(item.strip())
+    return out
 
 
 def _manager_insights(
@@ -557,19 +568,12 @@ def _zone_cards_grid(
     friendly_zone_fn: Any,
     format_dwell_fn: Any,
 ) -> str:
-    parts = ['<div class="brand-rank-grid">']
-    for rank, zone in enumerate(ranked, 1):
-        tier = "green" if rank <= 3 else ("amber" if float(zone["interest_rate"]) >= 25 else "red")
-        card_zone = {
-            "zone_id": zone["zone_id"],
-            "zone_display": friendly_zone_fn(str(zone["zone_id"])),
-            "visits": zone["visits"],
-            "dwell_display": format_dwell_fn(float(zone["dwell_ms"])),
-            "score": float(zone["interest_rate"]),
-        }
-        parts.append(zone_card_html(card_zone, rank, tier))
-    parts.append("</div>")
-    return "".join(parts)
+    return zone_tier_rows_html(
+        ranked,
+        friendly_zone_fn=friendly_zone_fn,
+        format_dwell_fn=format_dwell_fn,
+        score_key="interest_rate",
+    )
 
 
 def _render_today_at_a_glance(
@@ -627,6 +631,7 @@ def render_cctv_real_dashboard(
     health: dict[str, Any],
     friendly_zone_fn: Any,
     format_dwell_fn: Any,
+    business_insights: dict[str, Any] | None = None,
 ) -> None:
     """Retail intelligence layout for store managers (business-first)."""
     st.markdown(CCTV_CSS, unsafe_allow_html=True)
@@ -660,32 +665,45 @@ def render_cctv_real_dashboard(
         unsafe_allow_html=True,
     )
 
-    summary_bullets = _executive_summary_bullets(
-        unique_visitors=unique_visitors,
-        total_revenue_inr=total_revenue_inr,
-        top_zone=most_visited,
-        weak_zone=least_visited,
-        friendly_zone_fn=friendly_zone_fn,
-    )
-    st.markdown(
-        '<div class="cctv-summary fade-up"><h3>Today\'s Store Summary</h3><ul>'
-        + "".join(f"<li>{item}</li>" for item in summary_bullets)
-        + "</ul></div>",
-        unsafe_allow_html=True,
+    conversion_rate = float(metrics.get("conversion_rate", 0.0))
+    insight_data = (business_insights or {}).get("insights") or {}
+    store_summary = str(insight_data.get("store_summary") or "").strip()
+    manager_actions = _dedupe_lines(
+        [str(x) for x in (insight_data.get("manager_actions") or []) if str(x).strip()]
     )
 
-    insight_lines = _manager_insights(
-        avg_dwell_ms=avg_shopping_ms,
-        top_zone=most_visited,
-        weak_zone=least_visited,
-        friendly_zone_fn=friendly_zone_fn,
-    )
-    st.markdown(
-        '<div class="cctv-insights fade-up"><h3>Store Manager Insights</h3><ul>'
-        + "".join(f"<li>{item}</li>" for item in insight_lines)
-        + "</ul></div>",
-        unsafe_allow_html=True,
-    )
+    if business_insights and store_summary:
+        render_todays_story(store_summary, conversion_rate)
+    else:
+        summary_bullets = _executive_summary_bullets(
+            unique_visitors=unique_visitors,
+            total_revenue_inr=total_revenue_inr,
+            top_zone=most_visited,
+            weak_zone=least_visited,
+            friendly_zone_fn=friendly_zone_fn,
+        )
+        st.markdown(
+            '<div class="cctv-summary fade-up"><h3>Today\'s Store Summary</h3><ul>'
+            + "".join(f"<li>{item}</li>" for item in summary_bullets)
+            + "</ul></div>",
+            unsafe_allow_html=True,
+        )
+
+    if business_insights and manager_actions:
+        render_recommended_actions(manager_actions)
+    else:
+        insight_lines = _manager_insights(
+            avg_dwell_ms=avg_shopping_ms if avg_shopping_ms > 0 else cctv.avg_dwell_ms,
+            top_zone=most_visited,
+            weak_zone=least_visited,
+            friendly_zone_fn=friendly_zone_fn,
+        )
+        st.markdown(
+            '<div class="cctv-insights fade-up"><h3>Store Manager Insights</h3><ul>'
+            + "".join(f"<li>{item}</li>" for item in insight_lines)
+            + "</ul></div>",
+            unsafe_allow_html=True,
+        )
 
     if cctv.shelf_events == 0 and unique_visitors == 0:
         st.warning(
@@ -772,7 +790,7 @@ def render_cctv_real_dashboard(
             _brand_stat_chips_html(
                 most_zone=cctv.top_zone,
                 least_zone=cctv.weak_zone,
-                avg_time=format_dwell_fn(cctv.avg_dwell_ms),
+                avg_time=format_dwell_fn(avg_shopping_ms),
                 friendly_zone_fn=friendly_zone_fn,
             ),
             unsafe_allow_html=True,
@@ -782,7 +800,7 @@ def render_cctv_real_dashboard(
             use_container_width=True,
         )
         st.markdown(
-            '<p class="brand-rank-title">Brand area ranking</p>',
+            '<p class="zone-tier-section">Brand area performance</p>',
             unsafe_allow_html=True,
         )
         st.markdown(
@@ -792,6 +810,9 @@ def render_cctv_real_dashboard(
     else:
         st.info("No brand-area activity recorded for this day.")
     st.markdown("</div>", unsafe_allow_html=True)
+
+    if business_insights:
+        render_ai_insights(business_insights)
 
 
 # Backward-compatible alias
